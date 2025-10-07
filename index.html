@@ -577,7 +577,7 @@
             render();
         }
 
-        // Gérer le scan avec affichage de l'expéditeur
+        // Gérer le scan SANS JAMAIS toucher au DOM de la caméra
         function handleScan(code) {
             const cleanCode = code.trim().toUpperCase();
             
@@ -585,13 +585,22 @@
                 return;
             }
 
+            // CRITIQUE: Ne JAMAIS faire render() pendant que la caméra est active
+            const isCameraMode = state.scanMode === 'camera' && state.isCameraActive;
+
             if (state.scannedOrders.has(cleanCode)) {
                 const orderInfo = state.ordersMap[cleanCode];
-                const expediteur = orderInfo ? (orderInfo.store_full || orderInfo.store_name || 'Inconnu') : 'Inconnu';
-                showNotification(`⚠️ Déjà scanné | Expéditeur: ${expediteur}`, 'warning');
+                const expediteur = orderInfo ? (orderInfo.store_name || 'Inconnu') : 'Inconnu';
+                showNotification(`⚠️ Déjà scanné | ${expediteur}`, 'warning');
                 state.lastScanned = cleanCode;
                 playSound('duplicate');
-                updateCountersOnly();
+                
+                if (!isCameraMode) {
+                    updateCountersOnly();
+                } else {
+                    // En mode caméra: juste mettre à jour les compteurs directement dans le DOM
+                    updateCountersDirectly();
+                }
                 return;
             }
 
@@ -604,9 +613,13 @@
                     });
                 }
                 
-                showNotification('❌ Identifiant non trouvé - Ajouté aux codes inconnus', 'error');
+                showNotification('❌ Non trouvé', 'error');
                 playSound('error');
-                render();
+                
+                // NE PAS RENDER en mode caméra
+                if (!isCameraMode) {
+                    render();
+                }
                 return;
             }
 
@@ -614,12 +627,48 @@
             state.lastScanned = cleanCode;
             
             const orderInfo = state.ordersMap[cleanCode];
-            const expediteur = orderInfo ? (orderInfo.store_full || orderInfo.store_name || 'Inconnu') : 'Inconnu';
+            const expediteur = orderInfo ? (orderInfo.store_name || 'Inconnu') : 'Inconnu';
             
-            showNotification(`✅ Scanné | Expéditeur: ${expediteur}`, 'success');
+            showNotification(`✅ Scanné | ${expediteur}`, 'success');
             playSound('success');
             
-            updateCountersOnly();
+            if (!isCameraMode) {
+                updateCountersOnly();
+            } else {
+                // En mode caméra: mise à jour directe du DOM sans render
+                updateCountersDirectly();
+            }
+        }
+
+        // Mettre à jour les compteurs directement dans le DOM (pour mode caméra)
+        function updateCountersDirectly() {
+            const totalOrders = state.referenceOrders.length;
+            const totalScanned = state.scannedOrders.size;
+            const totalRemaining = totalOrders - totalScanned;
+            const progressPercent = totalOrders > 0 ? Math.round((totalScanned / totalOrders) * 100) : 0;
+
+            try {
+                // Mettre à jour les cartes de stats
+                const totalEl = document.querySelector('.from-blue-500 .text-3xl, .from-blue-500 .text-5xl, .from-blue-500 .font-black');
+                if (totalEl) totalEl.textContent = totalOrders;
+                
+                const scannedEl = document.querySelector('.from-green-500 .text-3xl, .from-green-500 .text-5xl, .from-green-500 .font-black');
+                if (scannedEl) scannedEl.textContent = totalScanned;
+                
+                const remainingEl = document.querySelector('.from-orange-500 .text-3xl, .from-orange-500 .text-5xl, .from-orange-500 .font-black');
+                if (remainingEl) remainingEl.textContent = totalRemaining;
+
+                // Mettre à jour la barre de progression
+                const progressBar = document.querySelector('.from-green-400');
+                if (progressBar) {
+                    progressBar.style.width = `${progressPercent}%`;
+                    progressBar.textContent = `${progressPercent}%`;
+                }
+
+                console.log(`📊 Direct: ${totalScanned}/${totalOrders} (${progressPercent}%)`);
+            } catch (e) {
+                console.log('Erreur mise à jour directe:', e);
+            }
         }
 
         // Mettre à jour UNIQUEMENT les chiffres sans toucher au DOM de la caméra
@@ -894,12 +943,14 @@
             state.isCameraActive = false;
         }
 
-        // Changer le mode de scan avec gestion caméra
+        // Changer le mode de scan SANS casser la caméra
         function changeScanMode(mode) {
             if (state.scanMode === mode) return;
             
+            const previousMode = state.scanMode;
+            
             // Arrêter la caméra seulement si on quitte le mode caméra
-            if (state.scanMode === 'camera') {
+            if (previousMode === 'camera' && mode !== 'camera') {
                 stopCamera();
             }
             
@@ -907,11 +958,10 @@
             render();
 
             // Démarrer la caméra seulement si on passe en mode caméra
-            if (mode === 'camera') {
-                // Attendre que le DOM soit prêt
+            if (mode === 'camera' && previousMode !== 'camera') {
                 setTimeout(() => {
                     startCamera();
-                }, 300);
+                }, 400);
             }
         }
 
@@ -1426,7 +1476,13 @@
         // Event handlers globaux
         function changeView(view) {
             if (view !== state.currentView) {
-                stopCamera();
+                // Sauvegarder l'état de la caméra
+                const wasCameraActive = state.scanMode === 'camera' && state.isCameraActive;
+                
+                // Arrêter la caméra si on change de vue
+                if (wasCameraActive) {
+                    stopCamera();
+                }
             }
             state.currentView = view;
             render();
