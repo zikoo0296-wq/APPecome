@@ -187,11 +187,86 @@
             return fullText;
         }
 
+        // Détecter l'expéditeur depuis le haut du document PDF - VERSION AMÉLIORÉE
+        function detectExpeditorFromTop(text) {
+            const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+            
+            console.log('🔍 Recherche expéditeur dans les 30 premières lignes:');
+            
+            // Chercher dans les 30 premières lignes
+            for (let i = 0; i < Math.min(lines.length, 30); i++) {
+                const line = lines[i];
+                console.log(`Ligne ${i}: "${line}"`);
+                
+                // Pattern 1: "Expéditeur: XXX" ou "Expéditeur : XXX"
+                if (line.toLowerCase().includes('expéditeur') || line.toLowerCase().includes('expediteur')) {
+                    // Essayer d'extraire après le ":"
+                    const afterColon = line.split(':')[1];
+                    if (afterColon) {
+                        let expeditor = afterColon.trim()
+                            .replace(/\[\d+\]/g, '')  // Enlever [chiffres]
+                            .replace(/[-–]/g, '')      // Enlever tirets
+                            .replace(/\s+/g, ' ')      // Normaliser espaces
+                            .trim();
+                        
+                        if (expeditor && expeditor.length > 2 && expeditor.length < 50) {
+                            console.log(`✅ TROUVÉ (après ":"): "${expeditor}"`);
+                            return expeditor;
+                        }
+                    }
+                    
+                    // Sinon, chercher sur la ligne suivante
+                    const nextLine = lines[i + 1];
+                    if (nextLine) {
+                        let expeditor = nextLine
+                            .replace(/\[\d+\]/g, '')
+                            .replace(/[-–]/g, '')
+                            .replace(/\s+/g, ' ')
+                            .trim();
+                        
+                        if (expeditor && expeditor.length > 2 && expeditor.length < 50 && /^[A-Za-z]/.test(expeditor)) {
+                            console.log(`✅ TROUVÉ (ligne suivante): "${expeditor}"`);
+                            return expeditor;
+                        }
+                    }
+                }
+                
+                // Pattern 2: Ligne commençant par [chiffres] ou contenant [chiffres]-nom
+                const match = line.match(/\[?\d+\]?\s*[-–]?\s*([A-Za-z][A-Za-z0-9\s]+)/);
+                if (match && !line.toLowerCase().includes('tel') && !line.toLowerCase().includes('code')) {
+                    let expeditor = match[1].trim().split(/\s{2,}/)[0]; // Prendre jusqu'au double espace
+                    if (expeditor.length > 2 && expeditor.length < 50) {
+                        console.log(`✅ TROUVÉ (pattern code): "${expeditor}"`);
+                        return expeditor;
+                    }
+                }
+                
+                // Pattern 3: "De: XXX" ou "From: XXX"
+                if (line.toLowerCase().startsWith('de:') || line.toLowerCase().startsWith('from:')) {
+                    let expeditor = line.split(':')[1].trim()
+                        .replace(/\[\d+\]/g, '')
+                        .replace(/[-–]/g, '')
+                        .trim();
+                    
+                    if (expeditor && expeditor.length > 2) {
+                        console.log(`✅ TROUVÉ (De:/From:): "${expeditor}"`);
+                        return expeditor;
+                    }
+                }
+            }
+            
+            console.log('❌ AUCUN expéditeur trouvé dans les 30 premières lignes');
+            console.log('💡 Affichage des 10 premières lignes pour debug:');
+            lines.slice(0, 10).forEach((line, i) => console.log(`  ${i}: ${line}`));
+            
+            return "";
+        }
+
         // Extraire les informations structurées d'un ticket
         function extractTicketInfo(text) {
             const info = {
                 store_name: "",
-                store_full: "", // Nom complet avec code
+                store_full: "",
                 quantity: "",
                 product_name: "",
                 price: "",
@@ -206,14 +281,14 @@
                 const expediteurMatch = line.match(/Expéditeur\s*:\s*(.+?)(?:\s*\[|$)/i);
                 if (expediteurMatch) {
                     const fullStore = expediteurMatch[1].trim();
-                    info.store_full = fullStore; // Garder la version complète
+                    info.store_full = fullStore;
                     
-                    // Extraire juste le nom (sans code entre crochets)
+                    // Nettoyer: enlever [code] et tirets
                     const cleanMatch = fullStore.match(/(?:\[\d+\]\s*[-–]?\s*)?(.+?)(?:\s*\[|$)/);
                     if (cleanMatch) {
-                        info.store_name = cleanMatch[1].trim().replace(/^[-–]\s*/, '');
+                        info.store_name = cleanMatch[1].trim().replace(/^[-–]\s*/, '').replace(/\[\d+\]$/, '');
                     } else {
-                        info.store_name = fullStore;
+                        info.store_name = fullStore.replace(/\[\d+\]/g, '').replace(/[-–]/g, '').trim();
                     }
                     break;
                 }
@@ -285,10 +360,14 @@
             return matches ? [...new Set(matches)] : [];
         }
 
-        // Extraire les informations complètes des tickets SANS DOUBLONS
+        // Extraire les informations complètes des tickets avec expéditeur global
         function extractOrdersWithDetails(text) {
             const orders = [];
             const seenCodes = new Set();
+            
+            // IMPORTANT: Détecter l'expéditeur depuis le haut du document
+            const globalExpeditor = detectExpeditorFromTop(text);
+            console.log(`📋 Expéditeur global du document: "${globalExpeditor}"`);
             
             const sections = text.split(/(?=[A-Z]\d{7}[A-Z]{2})/);
             
@@ -305,11 +384,15 @@
                     seenCodes.add(code);
                     const ticketInfo = extractTicketInfo(section);
                     
+                    // Si pas d'expéditeur trouvé dans le ticket, utiliser l'expéditeur global
+                    const finalStoreName = ticketInfo.store_name || globalExpeditor || "Non identifié";
+                    const finalStoreFull = ticketInfo.store_full || globalExpeditor || "Non identifié";
+                    
                     orders.push({
                         tracking: code,
                         barcode: code,
-                        store_name: ticketInfo.store_name,
-                        store_full: ticketInfo.store_full,
+                        store_name: finalStoreName,
+                        store_full: finalStoreFull,
                         quantity: ticketInfo.quantity,
                         product_name: ticketInfo.product_name,
                         price: ticketInfo.price,
@@ -321,7 +404,7 @@
                 }
             }
 
-            console.log(`✅ ${orders.length} commandes uniques extraites`);
+            console.log(`✅ ${orders.length} commandes extraites avec expéditeur: ${globalExpeditor || 'Non détecté'}`);
             return orders;
         }
 
@@ -351,6 +434,16 @@
                         if (orders.length > 0 && orders[0].store_name) {
                             fileExpeditor = orders[0].store_name;
                         }
+                        
+                        console.log(`📄 Fichier ${file.name}:`, {
+                            total: orders.length,
+                            expediteur: fileExpeditor,
+                            premiers: orders.slice(0, 3).map(o => ({
+                                code: o.tracking,
+                                store_name: o.store_name,
+                                store_full: o.store_full
+                            }))
+                        });
                     } else if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
                         const text = await file.text();
                         const codes = text.split(/[\n,]/).map(code => code.trim()).filter(code => /[A-Z]\d{7}[A-Z]{2}/.test(code));
@@ -358,8 +451,8 @@
                         orders = uniqueCodes.map(code => ({
                             tracking: code,
                             barcode: code,
-                            store_name: "",
-                            store_full: "",
+                            store_name: "Import CSV",
+                            store_full: "Import CSV",
                             quantity: "",
                             product_name: "",
                             price: "",
@@ -368,6 +461,7 @@
                             scanned: false,
                             id: Date.now() + Math.random()
                         }));
+                        fileExpeditor = "Import CSV";
                     } else if (file.type === 'text/plain') {
                         const text = await file.text();
                         const codes = text.split(/[\n,\s]/).map(code => code.trim()).filter(code => /[A-Z]\d{7}[A-Z]{2}/.test(code));
@@ -375,8 +469,8 @@
                         orders = uniqueCodes.map(code => ({
                             tracking: code,
                             barcode: code,
-                            store_name: "",
-                            store_full: "",
+                            store_name: "Import TXT",
+                            store_full: "Import TXT",
                             quantity: "",
                             product_name: "",
                             price: "",
@@ -385,6 +479,7 @@
                             scanned: false,
                             id: Date.now() + Math.random()
                         }));
+                        fileExpeditor = "Import TXT";
                     }
 
                     const newOrders = orders.filter(order => {
@@ -407,16 +502,18 @@
                 }
             }
 
-            // Regrouper par store et créer ordersMap
+            // Regrouper par store_name (nom propre)
             const storeGroups = {};
             const ordersMap = {};
             
             allOrders.forEach(order => {
-                const store = order.store_name || 'Non identifié';
-                if (!storeGroups[store]) {
-                    storeGroups[store] = [];
+                // Utiliser store_name en priorité, puis fallback
+                const storeName = order.store_name || order.store_full || 'Non identifié';
+                
+                if (!storeGroups[storeName]) {
+                    storeGroups[storeName] = [];
                 }
-                storeGroups[store].push(order);
+                storeGroups[storeName].push(order);
                 ordersMap[order.tracking] = order;
             });
 
@@ -428,9 +525,17 @@
             
             const totalCodes = allOrders.length;
             const storeCount = Object.keys(storeGroups).length;
-            showNotification(`✅ ${totalCodes} commandes uniques importées de ${storeCount} expéditeur(s)`, 'success');
             
-            console.log('📦 Données extraites:', { total: allOrders.length, orders: allOrders, stores: storeGroups, files: processedFiles });
+            console.log('✅ Import terminé:', {
+                total: totalCodes,
+                fichiers: processedFiles,
+                groupes: Object.entries(storeGroups).map(([name, orders]) => ({
+                    expediteur: name,
+                    count: orders.length
+                }))
+            });
+            
+            showNotification(`✅ ${totalCodes} commandes de ${storeCount} expéditeur(s)`, 'success');
             render();
         }
 
@@ -1004,19 +1109,46 @@
                                                 <span class="text-2xl">📊</span>
                                                 Répartition par expéditeur
                                             </p>
-                                            ${Object.entries(state.storeGroups).map(([store, orders]) => `
-                                                <div class="flex justify-between items-center py-2 border-b border-purple-200 last:border-0">
-                                                    <span class="text-purple-900 font-semibold flex items-center gap-2">
-                                                        <span class="bg-purple-200 text-purple-900 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold">
-                                                            ${orders.length}
-                                                        </span>
-                                                        ${store}
-                                                    </span>
-                                                    <span class="bg-purple-200 text-purple-900 px-3 py-1 rounded-full text-sm font-bold">
-                                                        ${orders.length} ticket${orders.length > 1 ? 's' : ''}
+                                            <div class="space-y-2">
+                                                ${Object.entries(state.storeGroups)
+                                                    .sort((a, b) => b[1].length - a[1].length)
+                                                    .map(([store, orders]) => {
+                                                        const scanned = orders.filter(o => state.scannedOrders.has(o.tracking)).length;
+                                                        const remaining = orders.length - scanned;
+                                                        const percent = Math.round((scanned / orders.length) * 100);
+                                                        
+                                                        return `
+                                                            <div class="bg-white rounded-lg p-3 border-2 border-purple-200">
+                                                                <div class="flex justify-between items-center mb-2">
+                                                                    <span class="text-purple-900 font-bold text-base flex items-center gap-2">
+                                                                        <span class="bg-purple-500 text-white w-10 h-10 rounded-full flex items-center justify-center text-sm font-black">
+                                                                            ${orders.length}
+                                                                        </span>
+                                                                        ${store}
+                                                                    </span>
+                                                                    <span class="text-purple-700 text-sm font-semibold">
+                                                                        ${scanned}/${orders.length}
+                                                                    </span>
+                                                                </div>
+                                                                <div class="bg-gray-200 rounded-full h-2 overflow-hidden">
+                                                                    <div class="bg-gradient-to-r from-purple-400 to-purple-600 h-full transition-all duration-500" style="width: ${percent}%"></div>
+                                                                </div>
+                                                                <div class="flex justify-between text-xs text-purple-600 mt-1">
+                                                                    <span>✅ ${scanned} scannés</span>
+                                                                    <span>⏳ ${remaining} restants</span>
+                                                                </div>
+                                                            </div>
+                                                        `;
+                                                    }).join('')}
+                                            </div>
+                                            <div class="mt-3 pt-3 border-t-2 border-purple-300">
+                                                <div class="flex justify-between items-center">
+                                                    <span class="text-purple-900 font-bold">Total général</span>
+                                                    <span class="bg-purple-500 text-white px-4 py-2 rounded-full font-black">
+                                                        ${state.referenceOrders.length} tickets
                                                     </span>
                                                 </div>
-                                            `).join('')}
+                                            </div>
                                         </div>
                                     ` : ''}
                                 </div>
