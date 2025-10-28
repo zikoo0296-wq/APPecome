@@ -361,30 +361,50 @@
         }
 
         // Extraire UNIQUEMENT les vrais codes de tracking
-        // Extraire UNIQUEMENT les codes qui viennent après " - " (sous le code-barres)
+        // Extraire UNIQUEMENT les codes sous le code-barres
         function extractTrackingCodes(text) {
-            console.log('🔍 === RECHERCHE CODES APRÈS TIRET ===');
-            
-            // Pattern : chercher " - CODE" où CODE = 8-11 caractères alphanumériques
-            const pattern = /\s-\s+([A-Z][A-Z0-9]{7,10})\b/g;
-            const matches = [...text.matchAll(pattern)];
-            
-            console.log(`📊 ${matches.length} codes trouvés après " - "`);
+            console.log('🔍 === RECHERCHE CODES SOUS CODE-BARRES ===');
             
             const codes = new Set();
-            matches.forEach((match, i) => {
-                const code = match[1];
-                codes.add(code);
-                if (i < 10) console.log(`  ✅ ${code}`);
-            });
+            const lines = text.split('\n');
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                
+                // Pattern 1: XXX-12345 - CODE (exemple: ORH2503 - S5FE48B7A)
+                const match1 = line.match(/([A-Z0-9]+)\s*-\s*([A-Z][A-Z0-9]{7,10})\b/);
+                if (match1) {
+                    const code = match1[2];
+                    codes.add(code);
+                    console.log(`  ✅ Trouvé: ${match1[1]} - ${code}`);
+                    continue;
+                }
+                
+                // Pattern 2: Si ligne contient une référence numérique (7-8 chiffres)
+                // alors chercher un code sur la même ligne ou ligne suivante
+                if (/\b\d{7,8}\b/.test(line)) {
+                    const codeMatch = line.match(/\b([A-Z][A-Z0-9]{7,10})\b/);
+                    if (codeMatch) {
+                        codes.add(codeMatch[1]);
+                        console.log(`  ✅ Trouvé après réf: ${codeMatch[1]}`);
+                    } else if (i < lines.length - 1) {
+                        const nextLine = lines[i + 1];
+                        const nextMatch = nextLine.match(/\b([A-Z][A-Z0-9]{7,10})\b/);
+                        if (nextMatch) {
+                            codes.add(nextMatch[1]);
+                            console.log(`  ✅ Trouvé ligne suivante: ${nextMatch[1]}`);
+                        }
+                    }
+                }
+            }
             
             const codesArray = [...codes];
-            console.log(`\n✅ ${codesArray.length} codes UNIQUES extraits`);
+            console.log(`\n✅ ${codesArray.length} codes SOUS CODE-BARRES détectés`);
             
             if (codesArray.length === 0) {
-                console.log('❌ AUCUN code trouvé après " - "!');
-                console.log('📝 Aperçu texte:');
-                console.log(text.substring(0, 1000));
+                console.log('❌ Aucun code trouvé !');
+                console.log('📝 Aperçu (500 premiers caractères):');
+                console.log(text.substring(0, 500));
             }
             
             return codesArray;
@@ -657,18 +677,37 @@
 
         // Gérer le scan SANS JAMAIS toucher au DOM de la caméra
         function handleScan(code) {
-            const cleanCode = code.trim().toUpperCase();
+            console.log('\n=== SCAN DÉTECTÉ ===');
+            console.log('Code brut reçu:', code);
             
-            if (!cleanCode || !/[A-Z]\d{7}[A-Z]{2}/.test(cleanCode)) {
+            const cleanCode = code.trim().toUpperCase();
+            console.log('Code nettoyé:', cleanCode);
+            console.log('Longueur:', cleanCode.length);
+            
+            // Pattern LARGE : accepter N'IMPORTE quel code alphanumérique de 8-11 caractères
+            const isValidFormat = /^[A-Z][A-Z0-9]{7,10}$/.test(cleanCode);
+            console.log('Format valide?', isValidFormat);
+            
+            if (!cleanCode || !isValidFormat) {
+                console.log(`❌ REJETÉ - Code invalide: "${cleanCode}"`);
                 return;
             }
+
+            console.log('✅ Format OK, vérification dans la liste...');
+            console.log('Total commandes importées:', state.referenceOrders.length);
+            console.log('Premières commandes:', state.referenceOrders.slice(0, 5));
 
             // CRITIQUE: Ne JAMAIS faire render() pendant que la caméra est active
             const isCameraMode = state.scanMode === 'camera' && state.isCameraActive;
 
-            if (state.scannedOrders.has(cleanCode)) {
+            // Vérifier si déjà scanné
+            const isAlreadyScanned = state.scannedOrders.has(cleanCode);
+            console.log('Déjà scanné?', isAlreadyScanned);
+            
+            if (isAlreadyScanned) {
                 const orderInfo = state.ordersMap[cleanCode];
                 const expediteur = orderInfo ? (orderInfo.store_name || 'Inconnu') : 'Inconnu';
+                console.log('⚠️ Code déjà scanné:', cleanCode, 'Expéditeur:', expediteur);
                 showNotification(`⚠️ Déjà scanné | ${expediteur}`, 'warning');
                 state.lastScanned = cleanCode;
                 playSound('duplicate');
@@ -676,13 +715,19 @@
                 if (!isCameraMode) {
                     updateCountersOnly();
                 } else {
-                    // En mode caméra: juste mettre à jour les compteurs directement dans le DOM
                     updateCountersDirectly();
                 }
                 return;
             }
 
-            if (!state.referenceOrders.includes(cleanCode)) {
+            // Vérifier si dans la liste
+            const isInList = state.referenceOrders.includes(cleanCode);
+            console.log('Dans la liste?', isInList);
+            
+            if (!isInList) {
+                console.log('❌ CODE NON TROUVÉ:', cleanCode);
+                console.log('Liste complète des codes:', state.referenceOrders);
+                
                 if (!state.unknownCodes.some(item => item.code === cleanCode)) {
                     state.unknownCodes.push({
                         code: cleanCode,
@@ -694,26 +739,27 @@
                 showNotification('❌ Non trouvé', 'error');
                 playSound('error');
                 
-                // NE PAS RENDER en mode caméra
                 if (!isCameraMode) {
                     render();
                 }
                 return;
             }
 
+            // SUCCESS!
+            console.log('✅ CODE TROUVÉ ET VALIDE!');
             state.scannedOrders.add(cleanCode);
             state.lastScanned = cleanCode;
             
             const orderInfo = state.ordersMap[cleanCode];
             const expediteur = orderInfo ? (orderInfo.store_name || 'Inconnu') : 'Inconnu';
             
+            console.log(`✅ Scanné avec succès: ${cleanCode} | ${expediteur}`);
             showNotification(`✅ Scanné | ${expediteur}`, 'success');
             playSound('success');
             
             if (!isCameraMode) {
                 updateCountersOnly();
             } else {
-                // En mode caméra: mise à jour directe du DOM sans render
                 updateCountersDirectly();
             }
         }
@@ -808,8 +854,8 @@
                 if (currentTime - state.lastKeyTime < 50) {
                     // C'est un scanner, accumuler les caractères
                     if (e.key === 'Enter') {
-                        // Fin du scan
-                        if (buffer.length >= 10) {
+                        // Fin du scan - MINIMUM 8 caractères au lieu de 10
+                        if (buffer.length >= 8) {
                             console.log('📦 Scanner détecté, code complet:', buffer);
                             handleScan(buffer);
                             
@@ -818,6 +864,8 @@
                             if (input) {
                                 input.value = buffer;
                             }
+                        } else {
+                            console.log('⚠️ Code trop court ignoré:', buffer, `(${buffer.length} caractères)`);
                         }
                         buffer = '';
                     } else {
@@ -833,7 +881,7 @@
                 // Sécurité : vider le buffer après 200ms
                 if (timeout) clearTimeout(timeout);
                 timeout = setTimeout(() => {
-                    if (buffer.length >= 10) {
+                    if (buffer.length >= 8) {  // MINIMUM 8 caractères
                         console.log('📦 Code détecté (timeout):', buffer);
                         handleScan(buffer);
                         
@@ -841,6 +889,8 @@
                         if (input) {
                             input.value = buffer;
                         }
+                    } else if (buffer.length > 0) {
+                        console.log('⚠️ Buffer vidé (trop court):', buffer, `(${buffer.length} caractères)`);
                     }
                     buffer = '';
                 }, 200);
@@ -962,11 +1012,13 @@
                                 }, 2000);
                             }
                             
-                            // Traiter le scan
-                            if (/[A-Z]\d{7}[A-Z]{2}/.test(code)) {
+                            // Traiter le scan - Pattern LARGE pour accepter tous les codes
+                            if (/^[A-Z][A-Z0-9]{7,10}$/.test(code)) {
                                 handleScan(code);
                                 lastCode = code;
                                 lastTime = now;
+                            } else {
+                                console.log(`⚠️ Code caméra ignoré (format invalide): ${code}`);
                             }
                             
                             // Libérer après 500ms
