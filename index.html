@@ -173,8 +173,10 @@
 
         // Extraire le texte d'un PDF
         async function extractTextFromPDF(arrayBuffer) {
+            console.log('📄 === EXTRACTION PDF ===');
             const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
             const pdf = await loadingTask.promise;
+            console.log(`📄 PDF: ${pdf.numPages} pages`);
             let fullText = '';
 
             for (let i = 1; i <= pdf.numPages; i++) {
@@ -183,6 +185,11 @@
                 const pageText = textContent.items.map(item => item.str).join(' ');
                 fullText += pageText + '\n';
             }
+
+            console.log(`✅ Texte extrait: ${fullText.length} caractères`);
+            console.log('📝 APERÇU (500 premiers caractères):');
+            console.log(fullText.substring(0, 500));
+            console.log('---');
 
             return fullText;
         }
@@ -353,59 +360,113 @@
             return info;
         }
 
-        // Extraire les codes de suivi
+        // Extraire UNIQUEMENT les vrais codes de tracking
+        // Extraire UNIQUEMENT les codes qui viennent après " - " (sous le code-barres)
         function extractTrackingCodes(text) {
-            const pattern = /[A-Z]\d{7}[A-Z]{2}/g;
-            const matches = text.match(pattern);
-            return matches ? [...new Set(matches)] : [];
+            console.log('🔍 === RECHERCHE CODES APRÈS TIRET ===');
+            
+            // Pattern : chercher " - CODE" où CODE = 8-11 caractères alphanumériques
+            const pattern = /\s-\s+([A-Z][A-Z0-9]{7,10})\b/g;
+            const matches = [...text.matchAll(pattern)];
+            
+            console.log(`📊 ${matches.length} codes trouvés après " - "`);
+            
+            const codes = new Set();
+            matches.forEach((match, i) => {
+                const code = match[1];
+                codes.add(code);
+                if (i < 10) console.log(`  ✅ ${code}`);
+            });
+            
+            const codesArray = [...codes];
+            console.log(`\n✅ ${codesArray.length} codes UNIQUES extraits`);
+            
+            if (codesArray.length === 0) {
+                console.log('❌ AUCUN code trouvé après " - "!');
+                console.log('📝 Aperçu texte:');
+                console.log(text.substring(0, 1000));
+            }
+            
+            return codesArray;
         }
 
         // Extraire les informations complètes des tickets avec expéditeur global
         function extractOrdersWithDetails(text) {
+            console.log('\n🔍 === EXTRACTION COMMANDES ===');
             const orders = [];
-            const seenCodes = new Set();
             
-            // IMPORTANT: Détecter l'expéditeur depuis le haut du document
-            const globalExpeditor = detectExpeditorFromTop(text);
-            console.log(`📋 Expéditeur global du document: "${globalExpeditor}"`);
+            // Détecter TOUS les codes avec le nouveau pattern
+            const allCodes = extractTrackingCodes(text);
+            console.log(`📊 ${allCodes.length} codes UNIQUES détectés (doublons déjà éliminés)`);
             
-            const sections = text.split(/(?=[A-Z]\d{7}[A-Z]{2})/);
+            if (allCodes.length === 0) {
+                console.error('❌ Aucun code détecté!');
+                return orders;
+            }
             
-            for (let section of sections) {
-                const codeMatch = section.match(/[A-Z]\d{7}[A-Z]{2}/);
-                if (codeMatch) {
-                    const code = codeMatch[0];
-                    
-                    if (seenCodes.has(code)) {
-                        console.log(`⚠️ Code dupliqué ignoré: ${code}`);
-                        continue;
+            // Pour chaque code UNIQUE, extraire les infos et l'expéditeur
+            allCodes.forEach((code, index) => {
+                const codeIndex = text.indexOf(code);
+                if (codeIndex === -1) return;
+                
+                // Prendre 600 caractères autour du code pour analyser
+                const start = Math.max(0, codeIndex - 400);
+                const end = Math.min(text.length, codeIndex + 200);
+                const section = text.substring(start, end);
+                
+                // Détecter l'expéditeur dans cette section
+                const expeditor = detectExpeditorFromSection(section);
+                const ticketInfo = extractTicketInfo(section);
+                
+                const finalStoreName = expeditor || ticketInfo.store_name || "Non identifié";
+                
+                orders.push({
+                    tracking: code,
+                    barcode: code,
+                    store_name: finalStoreName,
+                    store_full: ticketInfo.store_full || finalStoreName,
+                    quantity: ticketInfo.quantity || "",
+                    product_name: ticketInfo.product_name || "",
+                    price: ticketInfo.price || "",
+                    destination_city: ticketInfo.destination_city || "",
+                    receiver_name: ticketInfo.receiver_name || "",
+                    scanned: false,
+                    id: Date.now() + Math.random()
+                });
+                
+                if (index < 5) {
+                    console.log(`  ✅ ${code} → ${finalStoreName}`);
+                }
+            });
+
+            console.log(`\n✅ TOTAL: ${orders.length} commandes UNIQUES extraites (pas de doublons)\n`);
+            return orders;
+        }
+        
+        // Détecter expéditeur dans une section de texte
+        function detectExpeditorFromSection(text) {
+            const lines = text.split('\n').filter(l => l.trim());
+            
+            for (let i = 0; i < Math.min(lines.length, 15); i++) {
+                const line = lines[i];
+                
+                // Chercher [12345]-nom
+                if (/expéditeur|expediteur/i.test(line) || /\[\d+\]/.test(line)) {
+                    const match = line.match(/\[(\d+)\]\s*-\s*([a-zA-Z][a-zA-Z0-9\s]+)/i);
+                    if (match) {
+                        return match[2].trim().split(/\s{2,}|\[/)[0];
                     }
                     
-                    seenCodes.add(code);
-                    const ticketInfo = extractTicketInfo(section);
-                    
-                    // Si pas d'expéditeur trouvé dans le ticket, utiliser l'expéditeur global
-                    const finalStoreName = ticketInfo.store_name || globalExpeditor || "Non identifié";
-                    const finalStoreFull = ticketInfo.store_full || globalExpeditor || "Non identifié";
-                    
-                    orders.push({
-                        tracking: code,
-                        barcode: code,
-                        store_name: finalStoreName,
-                        store_full: finalStoreFull,
-                        quantity: ticketInfo.quantity,
-                        product_name: ticketInfo.product_name,
-                        price: ticketInfo.price,
-                        destination_city: ticketInfo.destination_city,
-                        receiver_name: ticketInfo.receiver_name,
-                        scanned: false,
-                        id: Date.now() + Math.random()
-                    });
+                    // Ligne suivante
+                    if (lines[i + 1]) {
+                        const nextMatch = lines[i + 1].match(/\[(\d+)\]\s*-\s*([a-zA-Z][a-zA-Z0-9\s]+)/);
+                        if (nextMatch) {
+                            return nextMatch[2].trim().split(/\s{2,}|\[/)[0];
+                        }
+                    }
                 }
             }
-
-            console.log(`✅ ${orders.length} commandes extraites avec expéditeur: ${globalExpeditor || 'Non détecté'}`);
-            return orders;
+            return "";
         }
 
         // Gérer l'import de fichiers avec détection de l'expéditeur par fichier
@@ -524,18 +585,20 @@
             state.isProcessing = false;
             
             const totalCodes = allOrders.length;
+            const uniqueCheck = new Set(allOrders.map(o => o.tracking));
             const storeCount = Object.keys(storeGroups).length;
             
-            console.log('✅ Import terminé:', {
-                total: totalCodes,
-                fichiers: processedFiles,
-                groupes: Object.entries(storeGroups).map(([name, orders]) => ({
-                    expediteur: name,
-                    count: orders.length
-                }))
-            });
+            console.log('✅ === IMPORT TERMINÉ ===');
+            console.log(`📦 Total commandes: ${totalCodes}`);
+            console.log(`🔍 Vérification doublons: ${uniqueCheck.size} codes uniques`);
+            if (totalCodes !== uniqueCheck.size) {
+                console.warn(`⚠️ ATTENTION: ${totalCodes - uniqueCheck.size} doublons détectés!`);
+            } else {
+                console.log(`✅ Aucun doublon - parfait!`);
+            }
+            console.log(`👥 ${storeCount} expéditeur(s) différent(s)`);
             
-            showNotification(`✅ ${totalCodes} commandes de ${storeCount} expéditeur(s)`, 'success');
+            showNotification(`✅ ${totalCodes} commandes uniques de ${storeCount} expéditeur(s)`, 'success');
             render();
         }
 
