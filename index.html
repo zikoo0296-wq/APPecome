@@ -477,7 +477,8 @@
             render();
 
             const allOrders = [];
-            const allCodes = new Set();
+            // IMPORTANT : Utiliser les codes EXISTANTS pour éviter les doublons entre imports
+            const allCodes = new Set(state.referenceOrders || []);
             const processedFiles = [];
 
             for (let i = 0; i < files.length; i++) {
@@ -545,7 +546,7 @@
 
                     const newOrders = orders.filter(order => {
                         if (allCodes.has(order.tracking)) {
-                            console.log(`⚠️ Code dupliqué entre fichiers ignoré: ${order.tracking}`);
+                            console.log(`⚠️ Code dupliqué ignoré: ${order.tracking}`);
                             return false;
                         }
                         allCodes.add(order.tracking);
@@ -563,11 +564,25 @@
                 }
             }
 
+            // IMPORTANT : Récupérer les anciennes commandes
+            const existingOrders = [];
+            if (state.ordersMap) {
+                Object.values(state.ordersMap).forEach(order => {
+                    existingOrders.push(order);
+                });
+            }
+            
+            // Combiner anciennes + nouvelles commandes
+            const combinedOrders = [...existingOrders, ...allOrders];
+            console.log(`📦 Anciennes commandes: ${existingOrders.length}`);
+            console.log(`➕ Nouvelles commandes: ${allOrders.length}`);
+            console.log(`📊 Total combiné: ${combinedOrders.length}`);
+
             // Regrouper par store_name (nom propre)
             const storeGroups = {};
             const ordersMap = {};
             
-            allOrders.forEach(order => {
+            combinedOrders.forEach(order => {
                 // Utiliser store_name en priorité, puis fallback
                 const storeName = order.store_name || order.store_full || 'Non identifié';
                 
@@ -580,12 +595,12 @@
 
             state.storeGroups = storeGroups;
             state.ordersMap = ordersMap;
-            state.referenceOrders = allOrders.map(o => o.tracking);
-            state.uploadedFiles = processedFiles;
+            state.referenceOrders = combinedOrders.map(o => o.tracking);  // UTILISER combinedOrders!
+            state.uploadedFiles = [...(state.uploadedFiles || []), ...processedFiles];
             state.isProcessing = false;
             
-            const totalCodes = allOrders.length;
-            const uniqueCheck = new Set(allOrders.map(o => o.tracking));
+            const totalCodes = combinedOrders.length;  // UTILISER combinedOrders!
+            const uniqueCheck = new Set(combinedOrders.map(o => o.tracking));
             const storeCount = Object.keys(storeGroups).length;
             
             console.log('✅ === IMPORT TERMINÉ ===');
@@ -598,7 +613,7 @@
             }
             console.log(`👥 ${storeCount} expéditeur(s) différent(s)`);
             
-            showNotification(`✅ ${totalCodes} commandes uniques de ${storeCount} expéditeur(s)`, 'success');
+            showNotification(`✅ +${allOrders.length} nouvelles → Total: ${totalCodes}`, 'success');
             render();
         }
 
