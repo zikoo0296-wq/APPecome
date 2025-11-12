@@ -91,6 +91,69 @@
             scanQueue: []
         };
 
+        // ============= SAUVEGARDE LOCALE (localStorage) =============
+        const STORAGE_KEY = 'digylog_scanner_data';
+
+        // Sauvegarder l'état dans localStorage
+        function saveToLocalStorage() {
+            try {
+                const dataToSave = {
+                    referenceOrders: state.referenceOrders,
+                    scannedOrders: Array.from(state.scannedOrders), // Convertir Set en Array
+                    unknownCodes: state.unknownCodes,
+                    uploadedFiles: state.uploadedFiles,
+                    storeGroups: state.storeGroups,
+                    ordersMap: state.ordersMap || {}, // Ajouter ordersMap
+                    lastUpdate: new Date().toISOString()
+                };
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
+                console.log('✅ Données sauvegardées localement');
+            } catch (error) {
+                console.error('❌ Erreur sauvegarde localStorage:', error);
+            }
+        }
+
+        // Restaurer l'état depuis localStorage
+        function loadFromLocalStorage() {
+            try {
+                const savedData = localStorage.getItem(STORAGE_KEY);
+                if (savedData) {
+                    const data = JSON.parse(savedData);
+                    state.referenceOrders = data.referenceOrders || [];
+                    state.scannedOrders = new Set(data.scannedOrders || []); // Reconvertir en Set
+                    state.unknownCodes = data.unknownCodes || [];
+                    state.uploadedFiles = data.uploadedFiles || [];
+                    state.storeGroups = data.storeGroups || {};
+                    state.ordersMap = data.ordersMap || {}; // Restaurer ordersMap
+                    
+                    console.log('✅ Données restaurées depuis localStorage');
+                    console.log(`📦 ${state.referenceOrders.length} commandes importées`);
+                    console.log(`✓ ${state.scannedOrders.size} commandes scannées`);
+                    return true;
+                }
+                return false;
+            } catch (error) {
+                console.error('❌ Erreur restauration localStorage:', error);
+                return false;
+            }
+        }
+
+        // Effacer toutes les données localStorage
+        function clearLocalStorage() {
+            if (confirm('⚠️ Effacer TOUTES les données sauvegardées localement ?\n\nCeci inclut :\n- Commandes importées\n- Scans effectués\n- Codes inconnus\n\nCette action est irréversible !')) {
+                localStorage.removeItem(STORAGE_KEY);
+                state.referenceOrders = [];
+                state.scannedOrders = new Set();
+                state.unknownCodes = [];
+                state.uploadedFiles = [];
+                state.storeGroups = {};
+                state.ordersMap = {}; // Effacer ordersMap
+                state.currentView = 'import';
+                showNotification('🗑️ Données effacées', 'success');
+                render();
+            }
+        }
+
         // Fonction pour afficher une notification avec disparition automatique
         function showNotification(message, type) {
             // Supprimer l'ancienne notification si elle existe
@@ -628,6 +691,7 @@
             console.log(`👥 ${storeCount} expéditeur(s) différent(s)`);
             
             showNotification(`✅ +${allOrders.length} nouvelles → Total: ${totalCodes}`, 'success');
+            saveToLocalStorage(); // 💾 Sauvegarder après import
             render();
         }
 
@@ -728,6 +792,7 @@
                         time: new Date().toLocaleTimeString('fr-FR'),
                         date: new Date().toLocaleDateString('fr-FR')
                     });
+                    saveToLocalStorage(); // 💾 Sauvegarder après ajout code inconnu
                 }
                 
                 showNotification('❌ Non trouvé', 'error');
@@ -743,6 +808,7 @@
             console.log('✅ CODE TROUVÉ ET VALIDE!');
             state.scannedOrders.add(cleanCode);
             state.lastScanned = cleanCode;
+            saveToLocalStorage(); // 💾 Sauvegarder après scan réussi
             
             const orderInfo = state.ordersMap[cleanCode];
             const expediteur = orderInfo ? (orderInfo.store_name || 'Inconnu') : 'Inconnu';
@@ -1117,6 +1183,7 @@
                     storeGroups: {},
                     scanQueue: []
                 };
+                saveToLocalStorage(); // 💾 Sauvegarder après réinitialisation
                 showNotification('✅ Réinitialisé', 'success');
                 render();
             }
@@ -1212,9 +1279,12 @@
                                 </div>
                             </div>
 
-                            <div class="flex gap-2 justify-center">
+                            <div class="flex gap-2 justify-center flex-wrap">
                                 <button onclick="exportCSV()" class="px-4 py-2 bg-green-600 text-white rounded-xl font-bold">
                                     📥 Exporter
+                                </button>
+                                <button onclick="clearLocalStorage()" class="px-4 py-2 bg-orange-600 text-white rounded-xl font-bold">
+                                    🗄️ Effacer Données
                                 </button>
                                 <button onclick="resetAll()" class="px-4 py-2 bg-red-600 text-white rounded-xl font-bold">
                                     🗑️ Réinitialiser
@@ -1566,6 +1636,7 @@
         // Supprimer un code inconnu
         function removeUnknownCode(code) {
             state.unknownCodes = state.unknownCodes.filter(item => item.code !== code);
+            saveToLocalStorage(); // 💾 Sauvegarder après suppression
             showNotification('✅ Code supprimé', 'success');
             render();
         }
@@ -1574,6 +1645,7 @@
         function clearUnknownCodes() {
             if (confirm('Effacer tous les codes non trouvés ?')) {
                 state.unknownCodes = [];
+                saveToLocalStorage(); // 💾 Sauvegarder après effacement
                 showNotification('✅ Liste effacée', 'success');
                 render();
             }
@@ -1622,6 +1694,17 @@
 
         // Initialisation
         window.addEventListener('load', () => {
+            // 📥 Restaurer les données sauvegardées localement
+            const hasData = loadFromLocalStorage();
+            if (hasData) {
+                console.log('✅ Données restaurées depuis le stockage local');
+                // Si des données ont été chargées, afficher la vue scan
+                if (state.referenceOrders.length > 0) {
+                    state.currentView = 'scan';
+                    showNotification('✅ Données restaurées', 'success');
+                }
+            }
+            
             initBarcodeScanner(); // Initialiser le listener du scanner
             render();
         });
