@@ -372,29 +372,23 @@
                 const line = lines[i].trim();
                 
                 // Pattern 1: XXX-12345 - CODE (exemple: ORH2503 - S5FE48B7A)
-                const match1 = line.match(/([A-Z0-9]+)\s*-\s*([A-Z][A-Z0-9]{7,10})\b/);
+                // Ce pattern capture le code qui vient APRÈS le tiret
+                const match1 = line.match(/\b\d{3,}\s*-\s*\d+\s+-\s*([A-Z][A-Z0-9]{7,10})\b/);
                 if (match1) {
-                    const code = match1[2];
+                    const code = match1[1];
                     codes.add(code);
-                    console.log(`  ✅ Trouvé: ${match1[1]} - ${code}`);
+                    console.log(`  ✅ Pattern code-barres: ${code}`);
                     continue;
                 }
                 
-                // Pattern 2: Si ligne contient une référence numérique (7-8 chiffres)
-                // alors chercher un code sur la même ligne ou ligne suivante
-                if (/\b\d{7,8}\b/.test(line)) {
-                    const codeMatch = line.match(/\b([A-Z][A-Z0-9]{7,10})\b/);
-                    if (codeMatch) {
-                        codes.add(codeMatch[1]);
-                        console.log(`  ✅ Trouvé après réf: ${codeMatch[1]}`);
-                    } else if (i < lines.length - 1) {
-                        const nextLine = lines[i + 1];
-                        const nextMatch = nextLine.match(/\b([A-Z][A-Z0-9]{7,10})\b/);
-                        if (nextMatch) {
-                            codes.add(nextMatch[1]);
-                            console.log(`  ✅ Trouvé ligne suivante: ${nextMatch[1]}`);
-                        }
-                    }
+                // Pattern 2: CODE à la fin d'une ligne avec code-barres
+                // Exemple: "NDw35ZLvzBFJQke - S6167C7DC"
+                const match2 = line.match(/([a-zA-Z0-9]+)\s*-\s*([A-Z][A-Z0-9]{7,10})$/);
+                if (match2 && match2[1].length > 5) {
+                    const code = match2[2];
+                    codes.add(code);
+                    console.log(`  ✅ Fin de ligne: ${code}`);
+                    continue;
                 }
             }
             
