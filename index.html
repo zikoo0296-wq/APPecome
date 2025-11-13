@@ -88,11 +88,125 @@
             continuousScan: true,
             douchetteMode: true,
             storeGroups: {},
-            scanQueue: []
+            scanQueue: [],
+            pdfPages: {} // 📸 Stockage des images des pages PDF
         };
 
-        // ============= SAUVEGARDE LOCALE (localStorage) =============
+        // ============= SAUVEGARDE LOCALE (localStorage + IndexedDB) =============
         const STORAGE_KEY = 'digylog_scanner_data';
+        const DB_NAME = 'digylog_pdf_images';
+        const DB_VERSION = 1;
+        const STORE_NAME = 'pdfPages';
+        let db = null;
+
+        // Initialiser IndexedDB pour stocker les images PDF
+        async function initIndexedDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                
+                request.onerror = () => {
+                    console.error('❌ Erreur ouverture IndexedDB');
+                    reject(request.error);
+                };
+                
+                request.onsuccess = () => {
+                    db = request.result;
+                    console.log('✅ IndexedDB initialisée');
+                    resolve(db);
+                };
+                
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(STORE_NAME)) {
+                        db.createObjectStore(STORE_NAME, { keyPath: 'code' });
+                        console.log('✅ Store IndexedDB créé');
+                    }
+                };
+            });
+        }
+
+        // Sauvegarder une image PDF dans IndexedDB
+        async function savePDFPageToDB(code, pageData) {
+            if (!db) await initIndexedDB();
+            
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readwrite');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.put({ code, ...pageData });
+                
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Récupérer une image PDF depuis IndexedDB
+        async function getPDFPageFromDB(code) {
+            if (!db) await initIndexedDB();
+            
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readonly');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.get(code);
+                
+                request.onsuccess = () => {
+                    if (request.result) {
+                        resolve({
+                            image: request.result.image,
+                            pageNumber: request.result.pageNumber,
+                            totalPages: request.result.totalPages
+                        });
+                    } else {
+                        resolve(null);
+                    }
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Charger toutes les images PDF dans state.pdfPages
+        async function loadAllPDFPagesFromDB() {
+            if (!db) await initIndexedDB();
+            
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readonly');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.openCursor();
+                const pages = {};
+                
+                request.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (cursor) {
+                        pages[cursor.value.code] = {
+                            image: cursor.value.image,
+                            pageNumber: cursor.value.pageNumber,
+                            totalPages: cursor.value.totalPages
+                        };
+                        cursor.continue();
+                    } else {
+                        console.log(`✅ ${Object.keys(pages).length} images PDF chargées depuis IndexedDB`);
+                        resolve(pages);
+                    }
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Effacer toutes les images PDF d'IndexedDB
+        async function clearPDFPagesFromDB() {
+            if (!db) await initIndexedDB();
+            
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readwrite');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.clear();
+                
+                request.onsuccess = () => {
+                    console.log('✅ Images PDF effacées d\'IndexedDB');
+                    resolve();
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
 
         // Sauvegarder l'état dans localStorage
         function saveToLocalStorage() {
@@ -138,16 +252,25 @@
             }
         }
 
-        // Effacer toutes les données localStorage
-        function clearLocalStorage() {
-            if (confirm('⚠️ Effacer TOUTES les données sauvegardées localement ?\n\nCeci inclut :\n- Commandes importées\n- Scans effectués\n- Codes inconnus\n\nCette action est irréversible !')) {
+        // Effacer toutes les données localStorage + IndexedDB
+        async function clearLocalStorage() {
+            if (confirm('⚠️ Effacer TOUTES les données sauvegardées localement ?\n\nCeci inclut :\n- Commandes importées\n- Scans effectués\n- Codes inconnus\n- Images PDF\n\nCette action est irréversible !')) {
                 localStorage.removeItem(STORAGE_KEY);
+                
+                // Effacer IndexedDB
+                try {
+                    await clearPDFPagesFromDB();
+                } catch (error) {
+                    console.error('Erreur effacement IndexedDB:', error);
+                }
+                
                 state.referenceOrders = [];
                 state.scannedOrders = new Set();
                 state.unknownCodes = [];
                 state.uploadedFiles = [];
                 state.storeGroups = {};
-                state.ordersMap = {}; // Effacer ordersMap
+                state.ordersMap = {};
+                state.pdfPages = {};
                 state.currentView = 'import';
                 showNotification('🗑️ Données effacées', 'success');
                 render();
@@ -242,14 +365,56 @@
             console.log(`📄 PDF: ${pdf.numPages} pages`);
             let fullText = '';
 
+            // Initialiser le stockage des images si nécessaire
+            if (!state.pdfPages) state.pdfPages = {};
+
             for (let i = 1; i <= pdf.numPages; i++) {
                 const page = await pdf.getPage(i);
                 const textContent = await page.getTextContent();
                 const pageText = textContent.items.map(item => item.str).join(' ');
                 fullText += pageText + '\n';
+                
+                // 📸 Capturer l'image de la page
+                const viewport = page.getViewport({ scale: 2.0 }); // Scale 2x pour bonne qualité
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                
+                await page.render({
+                    canvasContext: context,
+                    viewport: viewport
+                }).promise;
+                
+                // Convertir en base64 JPEG (compression pour économiser mémoire)
+                const imageData = canvas.toDataURL('image/jpeg', 0.8);
+                
+                // Extraire les codes de cette page spécifique
+                const pageCodes = extractTrackingCodes(pageText);
+                console.log(`  📄 Page ${i}: ${pageCodes.length} codes → stockage image`);
+                
+                // Associer l'image de la page à chaque code trouvé sur cette page
+                for (const code of pageCodes) {
+                    const pageData = {
+                        image: imageData,
+                        pageNumber: i,
+                        totalPages: pdf.numPages
+                    };
+                    
+                    // Stocker en mémoire
+                    state.pdfPages[code] = pageData;
+                    
+                    // 💾 Stocker dans IndexedDB pour persistance
+                    try {
+                        await savePDFPageToDB(code, pageData);
+                    } catch (error) {
+                        console.warn(`⚠️ Erreur sauvegarde image pour ${code}:`, error);
+                    }
+                }
             }
 
             console.log(`✅ Texte extrait: ${fullText.length} caractères`);
+            console.log(`📸 Images capturées et sauvegardées: ${Object.keys(state.pdfPages).length} codes`);
             console.log('📝 APERÇU (500 premiers caractères):');
             console.log(fullText.substring(0, 500));
             console.log('---');
@@ -468,7 +633,7 @@
         }
 
         // Extraire les informations complètes des tickets avec expéditeur global
-        function extractOrdersWithDetails(text) {
+        function extractOrdersWithDetails(text, fileName = '') {
             console.log('\n🔍 === EXTRACTION COMMANDES ===');
             const orders = [];
             
@@ -507,6 +672,7 @@
                     price: ticketInfo.price || "",
                     destination_city: ticketInfo.destination_city || "",
                     receiver_name: ticketInfo.receiver_name || "",
+                    fileName: fileName, // 📁 Ajouter le nom du fichier source
                     scanned: false,
                     id: Date.now() + Math.random()
                 });
@@ -567,7 +733,7 @@
                     if (file.type === 'application/pdf') {
                         const arrayBuffer = await file.arrayBuffer();
                         const text = await extractTextFromPDF(arrayBuffer);
-                        orders = extractOrdersWithDetails(text);
+                        orders = extractOrdersWithDetails(text, file.name); // 📁 Passer le nom du fichier
                         
                         // Détecter l'expéditeur du fichier (premier expéditeur trouvé)
                         if (orders.length > 0 && orders[0].store_name) {
@@ -597,6 +763,7 @@
                             price: "",
                             destination_city: "",
                             receiver_name: "",
+                            fileName: file.name, // 📁 Ajouter le nom du fichier
                             scanned: false,
                             id: Date.now() + Math.random()
                         }));
@@ -615,6 +782,7 @@
                             price: "",
                             destination_city: "",
                             receiver_name: "",
+                            fileName: file.name, // 📁 Ajouter le nom du fichier
                             scanned: false,
                             id: Date.now() + Math.random()
                         }));
@@ -698,11 +866,11 @@
         // Charger des données d'exemple avec expéditeurs
         function loadSampleData() {
             const sampleOrders = [
-                { tracking: 'S4906834EA', barcode: 'S4906834EA', store_name: 'idealshop', store_full: '[20849]-idealshop', quantity: '1', product_name: 'Sécateur Télescopique', price: '349 DH', destination_city: 'Fes', receiver_name: 'Senhaji', scanned: false, id: 1 },
-                { tracking: 'T3847562FR', barcode: 'T3847562FR', store_name: 'techstore', store_full: '[15623]-techstore', quantity: '2', product_name: 'Câble HDMI', price: '89 DH', destination_city: 'Casablanca', receiver_name: 'Alami', scanned: false, id: 2 },
-                { tracking: 'R2938475MC', barcode: 'R2938475MC', store_name: 'idealshop', store_full: '[20849]-idealshop', quantity: '1', product_name: 'Kit Jardinage', price: '199 DH', destination_city: 'Rabat', receiver_name: 'Bennani', scanned: false, id: 3 },
-                { tracking: 'P5629384TA', barcode: 'P5629384TA', store_name: 'fashionshop', store_full: '[33421]-fashionshop', quantity: '3', product_name: 'T-Shirt Coton', price: '150 DH', destination_city: 'Marrakech', receiver_name: 'Tazi', scanned: false, id: 4 },
-                { tracking: 'Q7483920AG', barcode: 'Q7483920AG', store_name: 'techstore', store_full: '[15623]-techstore', quantity: '1', product_name: 'Souris Sans Fil', price: '79 DH', destination_city: 'Tanger', receiver_name: 'Idrissi', scanned: false, id: 5 }
+                { tracking: 'S4906834EA', barcode: 'S4906834EA', store_name: 'idealshop', store_full: '[20849]-idealshop', quantity: '1', product_name: 'Sécateur Télescopique', price: '349 DH', destination_city: 'Fes', receiver_name: 'Senhaji', fileName: 'Exemple_idealshop.pdf', scanned: false, id: 1 },
+                { tracking: 'T3847562FR', barcode: 'T3847562FR', store_name: 'techstore', store_full: '[15623]-techstore', quantity: '2', product_name: 'Câble HDMI', price: '89 DH', destination_city: 'Casablanca', receiver_name: 'Alami', fileName: 'Exemple_techstore.pdf', scanned: false, id: 2 },
+                { tracking: 'R2938475MC', barcode: 'R2938475MC', store_name: 'idealshop', store_full: '[20849]-idealshop', quantity: '1', product_name: 'Kit Jardinage', price: '199 DH', destination_city: 'Rabat', receiver_name: 'Bennani', fileName: 'Exemple_idealshop.pdf', scanned: false, id: 3 },
+                { tracking: 'P5629384TA', barcode: 'P5629384TA', store_name: 'fashionshop', store_full: '[33421]-fashionshop', quantity: '3', product_name: 'T-Shirt Coton', price: '150 DH', destination_city: 'Marrakech', receiver_name: 'Tazi', fileName: 'Exemple_fashionshop.pdf', scanned: false, id: 4 },
+                { tracking: 'Q7483920AG', barcode: 'Q7483920AG', store_name: 'techstore', store_full: '[15623]-techstore', quantity: '1', product_name: 'Souris Sans Fil', price: '79 DH', destination_city: 'Tanger', receiver_name: 'Idrissi', fileName: 'Exemple_techstore.pdf', scanned: false, id: 5 }
             ];
 
             // Regrouper par store
@@ -728,6 +896,7 @@
                 { name: 'Exemple_fashionshop.pdf', count: 1, expeditor: 'fashionshop' }
             ];
             
+            saveToLocalStorage(); // 💾 Sauvegarder les données d'exemple
             showNotification(`✅ ${sampleOrders.length} commandes d'exemple chargées`, 'success');
             console.log('📦 Exemple de données:', { orders: sampleOrders, stores: storeGroups });
             render();
@@ -1156,9 +1325,16 @@
         }
 
         // Réinitialiser
-        function resetAll() {
+        async function resetAll() {
             if (confirm('Voulez-vous vraiment réinitialiser ?')) {
                 stopCamera();
+                
+                // Effacer IndexedDB
+                try {
+                    await clearPDFPagesFromDB();
+                } catch (error) {
+                    console.error('Erreur effacement IndexedDB:', error);
+                }
                 
                 state = {
                     referenceOrders: [],
@@ -1181,7 +1357,8 @@
                     continuousScan: true,
                     douchetteMode: true,
                     storeGroups: {},
-                    scanQueue: []
+                    scanQueue: [],
+                    pdfPages: {}
                 };
                 saveToLocalStorage(); // 💾 Sauvegarder après réinitialisation
                 showNotification('✅ Réinitialisé', 'success');
@@ -1571,10 +1748,19 @@
                                 <h2 class="text-xl font-black text-gray-800 mb-4 flex items-center gap-2">
                                     ⚠️ Restantes (${remainingOrders.length})
                                 </h2>
-                                <div class="grid grid-cols-2 gap-2">
+                                <div class="grid grid-cols-1 gap-3">
                                     ${remainingOrders.map(code => `
-                                        <div class="bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-300 rounded-xl p-3 text-center">
-                                            <p class="font-mono font-bold text-base">${code}</p>
+                                        <div class="bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-300 rounded-xl p-4 flex items-center justify-between hover:shadow-lg transition-all">
+                                            <div class="flex-1">
+                                                <p class="font-mono font-bold text-lg text-orange-900">${code}</p>
+                                                ${state.ordersMap[code] && state.ordersMap[code].fileName ? `
+                                                    <p class="text-xs text-orange-700 mt-1">📁 ${state.ordersMap[code].fileName}</p>
+                                                ` : ''}
+                                            </div>
+                                            <button onclick="showOrderDetails('${code}')" 
+                                                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-sm transition-all">
+                                                🔍 Voir
+                                            </button>
                                         </div>
                                     `).join('')}
                                 </div>
@@ -1651,6 +1837,210 @@
             }
         }
 
+        // Afficher l'image originale de la commande depuis le PDF
+        async function showOrderDetails(trackingCode) {
+            const order = state.ordersMap[trackingCode];
+            if (!order) {
+                showNotification('❌ Commande non trouvée', 'error');
+                return;
+            }
+
+            // Chercher l'image en mémoire d'abord
+            let pdfPage = state.pdfPages ? state.pdfPages[trackingCode] : null;
+            
+            // Si pas en mémoire, charger depuis IndexedDB
+            if (!pdfPage || !pdfPage.image) {
+                console.log(`📥 Chargement image depuis IndexedDB pour ${trackingCode}...`);
+                try {
+                    pdfPage = await getPDFPageFromDB(trackingCode);
+                    if (pdfPage) {
+                        // Mettre en cache en mémoire
+                        if (!state.pdfPages) state.pdfPages = {};
+                        state.pdfPages[trackingCode] = pdfPage;
+                        console.log('✅ Image chargée depuis IndexedDB');
+                    }
+                } catch (error) {
+                    console.error('❌ Erreur chargement IndexedDB:', error);
+                }
+            }
+            
+            if (!pdfPage || !pdfPage.image) {
+                showNotification('❌ Image PDF non disponible - Réimportez le PDF', 'error');
+                return;
+            }
+
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50 p-4';
+            modal.onclick = (e) => {
+                if (e.target === modal) {
+                    modal.remove();
+                }
+            };
+
+            const content = `
+                <div class="bg-white rounded-3xl shadow-2xl max-w-6xl w-full max-h-[95vh] overflow-hidden flex flex-col" onclick="event.stopPropagation()">
+                    <!-- En-tête -->
+                    <div class="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6">
+                        <div class="flex items-center justify-between mb-2">
+                            <h2 class="text-2xl font-black">📄 Commande Originale (PDF)</h2>
+                            <button onclick="this.closest('.fixed').remove()" class="text-white hover:text-gray-200 text-4xl font-bold leading-none">
+                                ×
+                            </button>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="font-mono text-2xl font-black">${trackingCode}</p>
+                                <p class="text-sm opacity-90 mt-1">📁 ${order.fileName || 'Fichier PDF'} - Page ${pdfPage.pageNumber}/${pdfPage.totalPages}</p>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-sm opacity-90">📮 ${order.store_name || 'Expéditeur'}</p>
+                                ${order.destination_city ? `<p class="text-sm opacity-90">📍 ${order.destination_city}</p>` : ''}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Image du PDF -->
+                    <div class="flex-1 overflow-auto bg-gray-100 p-6" id="pdfImageContainer">
+                        <div class="bg-white rounded-lg shadow-xl p-4 inline-block">
+                            <img src="${pdfPage.image}" 
+                                 alt="Page PDF ${pdfPage.pageNumber}" 
+                                 class="max-w-full h-auto"
+                                 style="max-height: 70vh;"
+                                 id="pdfImage">
+                        </div>
+                    </div>
+
+                    <!-- Boutons d'action -->
+                    <div class="p-6 border-t-2 border-gray-200 bg-white flex gap-3">
+                        <button onclick="printPDFPage('${trackingCode}')" 
+                                class="flex-1 py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-lg transition-all flex items-center justify-center gap-2">
+                                🖨️ Imprimer cette page
+                        </button>
+                        <button onclick="this.closest('.fixed').remove()" 
+                                class="px-8 py-4 bg-gray-600 hover:bg-gray-700 text-white rounded-xl font-bold text-lg transition-all">
+                            Fermer
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            modal.innerHTML = content;
+            document.body.appendChild(modal);
+        }
+
+        // Imprimer la page PDF originale
+        async function printPDFPage(trackingCode) {
+            // Chercher l'image en mémoire d'abord
+            let pdfPage = state.pdfPages ? state.pdfPages[trackingCode] : null;
+            
+            // Si pas en mémoire, charger depuis IndexedDB
+            if (!pdfPage || !pdfPage.image) {
+                console.log(`📥 Chargement image depuis IndexedDB pour impression...`);
+                try {
+                    pdfPage = await getPDFPageFromDB(trackingCode);
+                    if (pdfPage) {
+                        if (!state.pdfPages) state.pdfPages = {};
+                        state.pdfPages[trackingCode] = pdfPage;
+                    }
+                } catch (error) {
+                    console.error('❌ Erreur chargement IndexedDB:', error);
+                }
+            }
+            
+            const order = state.ordersMap[trackingCode];
+            
+            if (!pdfPage || !pdfPage.image) {
+                showNotification('❌ Image non disponible', 'error');
+                return;
+            }
+
+            const printWindow = window.open('', '', 'width=1000,height=800');
+            const content = `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <title>Commande ${trackingCode} - Page ${pdfPage.pageNumber}</title>
+                    <style>
+                        body {
+                            margin: 0;
+                            padding: 20px;
+                            display: flex;
+                            flex-direction: column;
+                            align-items: center;
+                            font-family: Arial, sans-serif;
+                        }
+                        .header {
+                            text-align: center;
+                            margin-bottom: 20px;
+                            padding: 20px;
+                            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+                            color: white;
+                            border-radius: 10px;
+                            width: 100%;
+                            max-width: 800px;
+                        }
+                        .header h1 {
+                            margin: 0 0 10px 0;
+                            font-size: 24px;
+                        }
+                        .tracking {
+                            font-family: monospace;
+                            font-size: 32px;
+                            font-weight: bold;
+                            letter-spacing: 2px;
+                        }
+                        .info {
+                            font-size: 14px;
+                            opacity: 0.9;
+                            margin-top: 5px;
+                        }
+                        .pdf-image {
+                            max-width: 100%;
+                            height: auto;
+                            border: 2px solid #e5e7eb;
+                            border-radius: 8px;
+                            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                        }
+                        @media print {
+                            body { padding: 0; }
+                            .header { 
+                                background: #3b82f6;
+                                -webkit-print-color-adjust: exact;
+                                print-color-adjust: exact;
+                            }
+                        }
+                        @page {
+                            margin: 1cm;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="header">
+                        <h1>📄 COMMANDE ORIGINALE - PDF</h1>
+                        <div class="tracking">${trackingCode}</div>
+                        <div class="info">
+                            📁 ${order.fileName || 'PDF'} - Page ${pdfPage.pageNumber}/${pdfPage.totalPages}<br>
+                            📮 ${order.store_name || 'Expéditeur'} ${order.destination_city ? '→ 📍 ' + order.destination_city : ''}
+                        </div>
+                    </div>
+                    <img src="${pdfPage.image}" alt="Page PDF" class="pdf-image">
+                </body>
+                </html>
+            `;
+
+            printWindow.document.write(content);
+            printWindow.document.close();
+            
+            // Attendre que l'image soit chargée avant d'imprimer
+            printWindow.onload = function() {
+                setTimeout(() => {
+                    printWindow.focus();
+                    printWindow.print();
+                }, 500);
+            };
+        }
+
         // Toggle mode douchette
         function toggleDouchetteMode() {
             state.douchetteMode = !state.douchetteMode;
@@ -1693,11 +2083,28 @@
         }
 
         // Initialisation
-        window.addEventListener('load', () => {
+        window.addEventListener('load', async () => {
+            // Initialiser IndexedDB
+            try {
+                await initIndexedDB();
+            } catch (error) {
+                console.error('❌ Erreur init IndexedDB:', error);
+            }
+            
             // 📥 Restaurer les données sauvegardées localement
             const hasData = loadFromLocalStorage();
             if (hasData) {
                 console.log('✅ Données restaurées depuis le stockage local');
+                
+                // Charger les images PDF depuis IndexedDB
+                try {
+                    const pdfPages = await loadAllPDFPagesFromDB();
+                    state.pdfPages = pdfPages;
+                    console.log(`📸 ${Object.keys(pdfPages).length} images PDF chargées depuis IndexedDB`);
+                } catch (error) {
+                    console.error('❌ Erreur chargement images PDF:', error);
+                }
+                
                 // Si des données ont été chargées, afficher la vue scan
                 if (state.referenceOrders.length > 0) {
                     state.currentView = 'scan';
