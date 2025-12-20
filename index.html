@@ -536,10 +536,27 @@
                 product_name: "",
                 price: "",
                 destination_city: "",
-                receiver_name: ""
+                receiver_name: "",
+                order_date: "" // 📅 Date de la commande
             };
 
             const lines = text.split('\n').map(line => line.trim());
+
+            // 📅 Extraire la date (format: 20/12/25, 19/12/2025, 20-12-25, etc.)
+            for (let line of lines) {
+                // Pattern 1: DD/MM/YY ou DD/MM/YYYY
+                const dateMatch1 = line.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+                if (dateMatch1) {
+                    const day = dateMatch1[1].padStart(2, '0');
+                    const month = dateMatch1[2].padStart(2, '0');
+                    let year = dateMatch1[3];
+                    if (year.length === 2) {
+                        year = '20' + year;
+                    }
+                    info.order_date = `${day}/${month}/${year}`;
+                    break;
+                }
+            }
 
             // Extraire le store_name (après "Expéditeur :")
             for (let line of lines) {
@@ -778,6 +795,7 @@
                     price: ticketInfo.price || "",
                     destination_city: ticketInfo.destination_city || "",
                     receiver_name: ticketInfo.receiver_name || "",
+                    order_date: ticketInfo.order_date || "", // 📅 Date de la commande
                     fileName: fileName, // 📁 Ajouter le nom du fichier source
                     scanned: false,
                     id: Date.now() + Math.random()
@@ -2442,7 +2460,17 @@
             
             // Générer le numéro de BL
             const blNumber = 'BL' + Date.now().toString().slice(-6);
-            const currentDate = new Date().toLocaleDateString('fr-FR');
+            
+            // 📅 Utiliser la date des commandes de cet expéditeur (première date trouvée)
+            let orderDate = '';
+            for (const order of orders) {
+                if (order.order_date) {
+                    orderDate = order.order_date;
+                    break;
+                }
+            }
+            // Si pas de date trouvée, utiliser la date du jour
+            const displayDate = orderDate || new Date().toLocaleDateString('fr-FR');
 
             // Créer les lignes du tableau
             let tableRows = '';
@@ -2453,11 +2481,14 @@
                 tableRows += '<tr><td>' + order.tracking + '</td><td>Casablanca</td><td style="color:' + color + ';font-weight:bold;">' + status + '</td></tr>';
             });
 
+            // ⚠️ NE PAS TRADUIRE le nom de l'expéditeur - utiliser tel quel
+            const storeNameDisplay = storeName;
+
             const htmlContent = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Bon de Ramassage - ${storeName}</title>
+<title>Bon de Ramassage - ${storeNameDisplay}</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: Arial, sans-serif; margin: 20px; font-size: 14px; }
@@ -2485,11 +2516,11 @@ tr:nth-child(even) { background: #f9f9f9; }
 <body>
 <div class="top">
 <h2>📦 BON DE RAMASSAGE</h2>
-<div class="bl"><b>BL N° : ${blNumber}</b><br><small style="color:#666;">${currentDate}</small></div>
+<div class="bl"><b>BL N° : ${blNumber}</b><br><small style="color:#666;">${displayDate}</small></div>
 </div>
 <div class="info">
-<div><span>Date</span><b>${currentDate}</b></div>
-<div><span>Seller Store</span><b>${storeName}</b></div>
+<div><span>Date</span><b>${displayDate}</b></div>
+<div><span>Seller Store</span><b>${storeNameDisplay}</b></div>
 <div class="orders"><span>Orders</span><b>${totalSortie}</b></div>
 </div>
 <table>
@@ -2509,7 +2540,7 @@ tr:nth-child(even) { background: #f9f9f9; }
             const url = URL.createObjectURL(blob);
             window.open(url, '_blank');
             
-            showNotification(`✅ Bon généré pour ${storeName}`, 'success');
+            showNotification(`✅ Bon généré pour ${storeNameDisplay}`, 'success');
         }
 
         // Générer tous les bons de ramassage
