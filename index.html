@@ -91,6 +91,8 @@
             storeGroups: {},
             scanQueue: [],
             pdfPages: {}, // 📸 Stockage des images des pages PDF
+            selectMode: false, // Mode sélection activé
+            selectedCodes: new Set(), // Codes sélectionnés
             // ============= RETOURS =============
             retours: {
                 orders: [], // Liste des commandes retour importées
@@ -1888,22 +1890,66 @@
 
                         ${remainingOrders.length > 0 ? `
                             <div class="bg-white rounded-3xl shadow-2xl p-6 fade-in">
-                                <h2 class="text-xl font-black text-gray-800 mb-4 flex items-center gap-2">
-                                    ⚠️ Restantes (${remainingOrders.length})
-                                </h2>
+                                <div class="flex items-center justify-between mb-4">
+                                    <h2 class="text-xl font-black text-gray-800 flex items-center gap-2">
+                                        ⚠️ Restantes (${remainingOrders.length})
+                                    </h2>
+                                    <div class="flex gap-2">
+                                        <button onclick="toggleSelectMode()" 
+                                                class="px-3 py-2 ${state.selectMode ? 'bg-purple-600' : 'bg-gray-500'} hover:opacity-90 text-white rounded-lg font-bold text-sm transition-all">
+                                            ${state.selectMode ? '✓ Sélection' : '☐ Sélection'}
+                                        </button>
+                                        ${state.selectMode && state.selectedCodes && state.selectedCodes.size > 0 ? `
+                                            <button onclick="scanSelectedCodes()" 
+                                                    class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-sm transition-all">
+                                                ✓ Scanner (${state.selectedCodes.size})
+                                            </button>
+                                        ` : ''}
+                                        <button onclick="scanAllRemainingCodes()" 
+                                                class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold text-sm transition-all">
+                                            ⚡ Tout scanner
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                ${state.selectMode ? `
+                                    <div class="flex gap-2 mb-4">
+                                        <button onclick="selectAllCodes()" class="px-3 py-1 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-lg text-sm font-bold">
+                                            ☑️ Tout sélectionner
+                                        </button>
+                                        <button onclick="deselectAllCodes()" class="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-lg text-sm font-bold">
+                                            ☐ Tout désélectionner
+                                        </button>
+                                    </div>
+                                ` : ''}
+                                
                                 <div class="grid grid-cols-1 gap-3">
                                     ${remainingOrders.map(code => `
-                                        <div class="bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-300 rounded-xl p-4 flex items-center justify-between hover:shadow-lg transition-all">
-                                            <div class="flex-1">
-                                                <p class="font-mono font-bold text-lg text-orange-900">${code}</p>
-                                                ${state.ordersMap[code] && state.ordersMap[code].fileName ? `
-                                                    <p class="text-xs text-orange-700 mt-1">📁 ${state.ordersMap[code].fileName}</p>
+                                        <div class="bg-gradient-to-br from-orange-50 to-red-50 border-2 ${state.selectMode && state.selectedCodes && state.selectedCodes.has(code) ? 'border-purple-500 ring-2 ring-purple-300' : 'border-orange-300'} rounded-xl p-4 flex items-center justify-between hover:shadow-lg transition-all ${state.selectMode ? 'cursor-pointer' : ''}"
+                                             ${state.selectMode ? `onclick="toggleCodeSelection('${code}')"` : ''}>
+                                            <div class="flex items-center gap-3 flex-1">
+                                                ${state.selectMode ? `
+                                                    <div class="w-6 h-6 rounded border-2 ${state.selectedCodes && state.selectedCodes.has(code) ? 'bg-purple-600 border-purple-600' : 'border-gray-400'} flex items-center justify-center">
+                                                        ${state.selectedCodes && state.selectedCodes.has(code) ? '<span class="text-white text-sm">✓</span>' : ''}
+                                                    </div>
                                                 ` : ''}
+                                                <div class="flex-1">
+                                                    <p class="font-mono font-bold text-lg text-orange-900">${code}</p>
+                                                    ${state.ordersMap[code] && state.ordersMap[code].fileName ? `
+                                                        <p class="text-xs text-orange-700 mt-1">📁 ${state.ordersMap[code].fileName}</p>
+                                                    ` : ''}
+                                                </div>
                                             </div>
-                                            <button onclick="showOrderDetails('${code}')" 
-                                                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-sm transition-all">
-                                                🔍 Voir
-                                            </button>
+                                            <div class="flex gap-2">
+                                                <button onclick="event.stopPropagation(); scanSingleCode('${code}')" 
+                                                        class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold text-sm transition-all">
+                                                    ✓ Scan
+                                                </button>
+                                                <button onclick="event.stopPropagation(); showOrderDetails('${code}')" 
+                                                        class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-sm transition-all">
+                                                    🔍 Voir
+                                                </button>
+                                            </div>
                                         </div>
                                     `).join('')}
                                 </div>
@@ -1978,6 +2024,110 @@
                 showNotification('✅ Liste effacée', 'success');
                 render();
             }
+        }
+
+        // ============= FONCTIONS DE SCAN GROUPÉ ET SÉLECTION =============
+        
+        // Toggle mode sélection
+        function toggleSelectMode() {
+            state.selectMode = !state.selectMode;
+            if (!state.selectMode) {
+                state.selectedCodes = new Set();
+            }
+            render();
+        }
+
+        // Toggle sélection d'un code
+        function toggleCodeSelection(code) {
+            if (!state.selectedCodes) state.selectedCodes = new Set();
+            
+            if (state.selectedCodes.has(code)) {
+                state.selectedCodes.delete(code);
+            } else {
+                state.selectedCodes.add(code);
+            }
+            render();
+        }
+
+        // Sélectionner tous les codes restants
+        function selectAllCodes() {
+            const remainingOrders = state.referenceOrders.filter(code => !state.scannedOrders.has(code));
+            state.selectedCodes = new Set(remainingOrders);
+            render();
+        }
+
+        // Désélectionner tous les codes
+        function deselectAllCodes() {
+            state.selectedCodes = new Set();
+            render();
+        }
+
+        // Scanner un seul code manuellement
+        function scanSingleCode(code) {
+            if (state.scannedOrders.has(code)) {
+                showNotification('⚠️ Déjà scanné: ' + code, 'warning');
+                return;
+            }
+            
+            state.scannedOrders.add(code);
+            state.lastScanned = code;
+            
+            const orderInfo = state.ordersMap[code];
+            const expediteur = orderInfo ? (orderInfo.store_name || 'Inconnu') : 'Inconnu';
+            
+            playSound('success');
+            showNotification(`✅ Scanné | ${expediteur}`, 'success');
+            saveToLocalStorage();
+            render();
+        }
+
+        // Scanner tous les codes sélectionnés
+        function scanSelectedCodes() {
+            if (!state.selectedCodes || state.selectedCodes.size === 0) {
+                showNotification('⚠️ Aucun code sélectionné', 'warning');
+                return;
+            }
+            
+            const count = state.selectedCodes.size;
+            
+            state.selectedCodes.forEach(code => {
+                if (!state.scannedOrders.has(code)) {
+                    state.scannedOrders.add(code);
+                }
+            });
+            
+            state.selectedCodes = new Set();
+            state.selectMode = false;
+            
+            playSound('success');
+            showNotification(`✅ ${count} commandes scannées!`, 'success');
+            saveToLocalStorage();
+            render();
+        }
+
+        // Scanner toutes les commandes restantes
+        function scanAllRemainingCodes() {
+            const remainingOrders = state.referenceOrders.filter(code => !state.scannedOrders.has(code));
+            
+            if (remainingOrders.length === 0) {
+                showNotification('✅ Toutes les commandes sont déjà scannées!', 'success');
+                return;
+            }
+            
+            if (!confirm(`Scanner les ${remainingOrders.length} commandes restantes ?`)) {
+                return;
+            }
+            
+            remainingOrders.forEach(code => {
+                state.scannedOrders.add(code);
+            });
+            
+            state.lastScanned = remainingOrders[remainingOrders.length - 1];
+            
+            playSound('success');
+            showNotification(`✅ ${remainingOrders.length} commandes scannées!`, 'success');
+            saveToLocalStorage();
+            render();
         }
 
         // Afficher l'image originale de la commande depuis le PDF
