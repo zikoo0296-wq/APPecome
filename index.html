@@ -686,21 +686,40 @@
                 
                 // Pattern 1: XXX-12345 - CODE (exemple: ORH2503 - S5FE48B7A)
                 // Ce pattern capture le code qui vient APRÈS le tiret
-                const match1 = line.match(/\b\d{3,}\s*-\s*\d+\s+-\s*([A-Z][A-Z0-9]{7,10})\b/);
+                const match1 = line.match(/\b\d{3,}\s*-\s*\d+\s+-\s*([A-Za-z][A-Za-z0-9]{7,10})\b/i);
                 if (match1) {
-                    const code = match1[1];
+                    const code = match1[1].toUpperCase();
                     codes.add(code);
                     console.log(`  ✅ Pattern code-barres: ${code}`);
                     continue;
                 }
                 
-                // Pattern 2: CODE à la fin d'une ligne avec code-barres
-                // Exemple: "NDw35ZLvzBFJQke - S6167C7DC"
-                const match2 = line.match(/([a-zA-Z0-9]+)\s*-\s*([A-Z][A-Z0-9]{7,10})$/);
-                if (match2 && match2[1].length > 5) {
-                    const code = match2[2];
+                // Pattern 2: XXXX - code (format générique avec tiret)
+                // Exemple: "79EE09 - s2d3a84fe" ou "91ABCD - s5856a88s"
+                const match2 = line.match(/([a-zA-Z0-9]+)\s*-\s*([A-Za-z][A-Za-z0-9]{7,10})$/i);
+                if (match2 && match2[1].length >= 4) {
+                    const code = match2[2].toUpperCase();
                     codes.add(code);
                     console.log(`  ✅ Fin de ligne: ${code}`);
+                    continue;
+                }
+                
+                // Pattern 3: STORENAME-xxxxx - code (format DIGYLOG avec nom de store)
+                // Exemple: "CARENA-28014 - se7e9ab7f"
+                const match3 = line.match(/\b[A-Za-z]+-\d+\s*-\s*([A-Za-z][A-Za-z0-9]{7,10})\b/i);
+                if (match3) {
+                    const code = match3[1].toUpperCase();
+                    codes.add(code);
+                    console.log(`  ✅ Pattern STORE-NUM: ${code}`);
+                    continue;
+                }
+                
+                // Pattern 4: ORHxxxxx - code ou BCxxxxx - code ou LEXxxxxx - code
+                const match4 = line.match(/\b(?:ORH|BC|LEX)[A-Z0-9]+\s*-\s*([A-Za-z][A-Za-z0-9]{7,10})\b/i);
+                if (match4) {
+                    const code = match4[1].toUpperCase();
+                    codes.add(code);
+                    console.log(`  ✅ Pattern ORH/BC/LEX: ${code}`);
                     continue;
                 }
             }
@@ -733,7 +752,7 @@
             
             // Pour chaque code UNIQUE, extraire les infos et l'expéditeur
             allCodes.forEach((code, index) => {
-                const codeIndex = text.indexOf(code);
+                const codeIndex = text.toLowerCase().indexOf(code.toLowerCase());
                 if (codeIndex === -1) return;
                 
                 // Prendre 600 caractères autour du code pour analyser
@@ -997,7 +1016,7 @@
             console.log('Longueur:', cleanCode.length);
             
             // Pattern LARGE : accepter N'IMPORTE quel code alphanumérique de 8-11 caractères
-            const isValidFormat = /^[A-Z][A-Z0-9]{7,10}$/.test(cleanCode);
+            const isValidFormat = /^[A-Za-z][A-Za-z0-9]{7,10}$/i.test(cleanCode);
             console.log('Format valide?', isValidFormat);
             
             if (!cleanCode || !isValidFormat) {
@@ -1339,7 +1358,7 @@
                             }
                             
                             // Traiter le scan - Pattern LARGE pour accepter tous les codes
-                            if (/^[A-Z][A-Z0-9]{7,10}$/.test(code)) {
+                            if (/^[A-Za-z][A-Za-z0-9]{7,10}$/i.test(code)) {
                                 handleScan(code);
                                 lastCode = code;
                                 lastTime = now;
