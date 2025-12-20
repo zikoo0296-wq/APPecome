@@ -543,18 +543,36 @@
             const lines = text.split('\n').map(line => line.trim());
 
             // 📅 Extraire la date (format: 20/12/25, 19/12/2025, 20-12-25, etc.)
+            // Chercher une date au début d'une ligne ou après "Hub"
             for (let line of lines) {
-                // Pattern 1: DD/MM/YY ou DD/MM/YYYY
-                const dateMatch1 = line.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
-                if (dateMatch1) {
-                    const day = dateMatch1[1].padStart(2, '0');
-                    const month = dateMatch1[2].padStart(2, '0');
-                    let year = dateMatch1[3];
+                // Pattern: DD/MM/YY ou DD/MM/YYYY au début de ligne ou seul
+                const dateMatch = line.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:\s|$)/);
+                if (dateMatch) {
+                    const day = dateMatch[1].padStart(2, '0');
+                    const month = dateMatch[2].padStart(2, '0');
+                    let year = dateMatch[3];
                     if (year.length === 2) {
                         year = '20' + year;
                     }
                     info.order_date = `${day}/${month}/${year}`;
                     break;
+                }
+            }
+            
+            // Si pas trouvé, chercher dans le format "XX/XX/XX Hub" 
+            if (!info.order_date) {
+                for (let line of lines) {
+                    const dateMatch2 = line.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\s+Hub/i);
+                    if (dateMatch2) {
+                        const day = dateMatch2[1].padStart(2, '0');
+                        const month = dateMatch2[2].padStart(2, '0');
+                        let year = dateMatch2[3];
+                        if (year.length === 2) {
+                            year = '20' + year;
+                        }
+                        info.order_date = `${day}/${month}/${year}`;
+                        break;
+                    }
                 }
             }
 
