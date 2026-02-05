@@ -93,6 +93,7 @@
             pdfPages: {}, // 📸 Stockage des images des pages PDF
             selectMode: false, // Mode sélection activé
             selectedCodes: new Set(), // Codes sélectionnés
+            searchScanned: '', // Recherche dans les scannés
             // ============= RETOURS =============
             retours: {
                 orders: [], // Liste des commandes retour importées
@@ -102,7 +103,8 @@
                 currentView: 'import', // 'import' ou 'scan'
                 scanMode: 'keyboard',
                 lastScanned: '',
-                unknownCodes: []
+                unknownCodes: [],
+                searchScanned: '' // Recherche dans les scannés retours
             }
         };
 
@@ -200,6 +202,23 @@
                         console.log(`✅ ${Object.keys(pages).length} images PDF chargées depuis IndexedDB`);
                         resolve(pages);
                     }
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Supprimer une image PDF d'IndexedDB
+        async function deletePDFPageFromDB(code) {
+            if (!db) await initIndexedDB();
+            
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readwrite');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.delete(code);
+                
+                request.onsuccess = () => {
+                    console.log(`✅ Image PDF "${code}" supprimée d'IndexedDB`);
+                    resolve();
                 };
                 request.onerror = () => reject(request.error);
             });
@@ -1520,6 +1539,209 @@
             }
         }
 
+        // ============= NOUVELLES FONCTIONS DE SUPPRESSION =============
+        
+        // Retirer un PDF importé (EXPÉDITIONS)
+        async function removePDFFile(fileName) {
+            if (!confirm(`Voulez-vous vraiment retirer le fichier "${fileName}" ?`)) {
+                return;
+            }
+            try {
+                console.log('🗑️ Suppression fichier:', fileName);
+                console.log('📦 state.ordersMap:', state.ordersMap);
+                console.log('📁 state.uploadedFiles:', state.uploadedFiles);
+                
+                // Trouver les trackings à supprimer en utilisant ordersMap
+                const trackingsToRemove = [];
+                if (state.ordersMap) {
+                    Object.values(state.ordersMap).forEach(order => {
+                        console.log('Vérif order:', order.fileName, '===', fileName, '?', order.fileName === fileName);
+                        if (order.fileName === fileName) {
+                            trackingsToRemove.push(order.tracking);
+                        }
+                    });
+                }
+                
+                console.log('🎯 Trackings à supprimer:', trackingsToRemove);
+                
+                // Supprimer de referenceOrders
+                state.referenceOrders = state.referenceOrders.filter(t => !trackingsToRemove.includes(t));
+                
+                // Supprimer de ordersMap
+                for (const tracking of trackingsToRemove) {
+                    delete state.ordersMap[tracking];
+                    state.scannedOrders.delete(tracking);
+                    try {
+                        await deletePDFPageFromDB(tracking);
+                    } catch (e) {
+                        console.log('Pas d\'image PDF à supprimer pour', tracking);
+                    }
+                    delete state.pdfPages[tracking];
+                }
+                
+                // Supprimer le fichier de uploadedFiles
+                console.log('Avant suppression uploadedFiles:', state.uploadedFiles.length);
+                state.uploadedFiles = state.uploadedFiles.filter(f => {
+                    console.log('Comparer:', f.name, '!==', fileName);
+                    return f.name !== fileName;
+                });
+                console.log('Après suppression uploadedFiles:', state.uploadedFiles.length);
+                
+                // Reconstruire storeGroups
+                const storeGroups = {};
+                if (state.ordersMap) {
+                    Object.values(state.ordersMap).forEach(order => {
+                        const storeName = order.store_name || order.store_full || 'Non identifié';
+                        if (!storeGroups[storeName]) {
+                            storeGroups[storeName] = [];
+                        }
+                        storeGroups[storeName].push(order);
+                    });
+                }
+                state.storeGroups = storeGroups;
+                
+                saveToLocalStorage();
+                showNotification(`✅ Fichier "${fileName}" retiré (${trackingsToRemove.length} commandes supprimées)`, 'success');
+                render();
+            } catch (error) {
+                console.error('❌ Erreur suppression PDF:', error);
+                console.error('Stack:', error.stack);
+                showNotification('❌ Erreur: ' + error.message, 'error');
+            }
+        }
+
+        // Supprimer un tracking scanné (EXPÉDITIONS)
+        async function removeScannedTracking(tracking) {
+            if (!confirm(`Voulez-vous vraiment supprimer le tracking "${tracking}" ?`)) {
+                return;
+            }
+            try {
+                state.scannedOrders.delete(tracking);
+                
+                // Supprimer l'image PDF si elle existe
+                try {
+                    await deletePDFPageFromDB(tracking);
+                } catch (e) {
+                    console.log('Pas d\'image PDF à supprimer pour', tracking);
+                }
+                delete state.pdfPages[tracking];
+                
+                saveToLocalStorage();
+                showNotification(`✅ Tracking "${tracking}" supprimé`, 'success');
+                render();
+            } catch (error) {
+                console.error('Erreur suppression tracking:', error);
+                showNotification('❌ Erreur lors de la suppression', 'error');
+            }
+        }
+
+        // Dé-scanner un tracking (EXPÉDITIONS)
+        function unscanTracking(tracking) {
+            if (!confirm(`Voulez-vous marquer "${tracking}" comme NON SCANNÉ ?`)) {
+                return;
+            }
+            try {
+                state.scannedOrders.delete(tracking);
+                saveToLocalStorage();
+                showNotification(`🔄 Tracking "${tracking}" marqué comme NON SCANNÉ`, 'info');
+                render();
+            } catch (error) {
+                console.error('Erreur dé-scan tracking:', error);
+                showNotification('❌ Erreur lors du dé-scan', 'error');
+            }
+        }
+
+        // Retirer un PDF retour (RETOURS)
+        function removeRetourPDFFile(fileName) {
+            if (!confirm(`Voulez-vous vraiment retirer le fichier "${fileName}" ?`)) {
+                return;
+            }
+            try {
+                console.log('🗑️ Suppression fichier retour:', fileName);
+                console.log('📦 state.retours.orders:', state.retours.orders);
+                console.log('📁 state.retours.uploadedFiles:', state.retours.uploadedFiles);
+                
+                // Trouver les trackings à supprimer
+                const trackingsToRemove = state.retours.orders
+                    .filter(o => {
+                        console.log('Comparer order.fileName:', o.fileName, '===', fileName, '?', o.fileName === fileName);
+                        return o.fileName === fileName;
+                    })
+                    .map(o => o.tracking);
+                
+                console.log('🎯 Trackings retours à supprimer:', trackingsToRemove);
+                
+                // Supprimer les orders
+                state.retours.orders = state.retours.orders.filter(o => o.fileName !== fileName);
+                
+                // Supprimer les scans
+                trackingsToRemove.forEach(tracking => {
+                    state.retours.scannedOrders.delete(tracking);
+                });
+                
+                // Supprimer le fichier
+                console.log('Avant suppression uploadedFiles:', state.retours.uploadedFiles.length);
+                state.retours.uploadedFiles = state.retours.uploadedFiles.filter(f => {
+                    console.log('Comparer:', f.name, '!==', fileName);
+                    return f.name !== fileName;
+                });
+                console.log('Après suppression uploadedFiles:', state.retours.uploadedFiles.length);
+                
+                // Reconstruire storeGroups
+                const storeGroups = {};
+                state.retours.orders.forEach(order => {
+                    const storeName = order.store || 'Non identifié';
+                    if (!storeGroups[storeName]) {
+                        storeGroups[storeName] = [];
+                    }
+                    storeGroups[storeName].push(order);
+                });
+                state.retours.storeGroups = storeGroups;
+                
+                saveRetoursToLocalStorage();
+                showNotification(`✅ Fichier "${fileName}" retiré (${trackingsToRemove.length} retours supprimés)`, 'success');
+                render();
+            } catch (error) {
+                console.error('❌ Erreur suppression PDF retour:', error);
+                console.error('Stack:', error.stack);
+                showNotification('❌ Erreur: ' + error.message, 'error');
+            }
+        }
+
+        // Supprimer un tracking retour scanné (RETOURS)
+        function removeRetourScannedTracking(tracking) {
+            if (!confirm(`Voulez-vous vraiment supprimer le tracking "${tracking}" ?`)) {
+                return;
+            }
+            try {
+                state.retours.scannedOrders.delete(tracking);
+                saveRetoursToLocalStorage();
+                showNotification(`✅ Tracking "${tracking}" supprimé`, 'success');
+                render();
+            } catch (error) {
+                console.error('Erreur suppression tracking retour:', error);
+                showNotification('❌ Erreur lors de la suppression', 'error');
+            }
+        }
+
+        // Dé-scanner un tracking retour (RETOURS)
+        function unscanRetourTracking(tracking) {
+            if (!confirm(`Voulez-vous marquer "${tracking}" comme NON SCANNÉ ?`)) {
+                return;
+            }
+            try {
+                state.retours.scannedOrders.delete(tracking);
+                saveRetoursToLocalStorage();
+                showNotification(`🔄 Tracking "${tracking}" marqué comme NON SCANNÉ`, 'info');
+                render();
+            } catch (error) {
+                console.error('Erreur dé-scan tracking retour:', error);
+                showNotification('❌ Erreur lors du dé-scan', 'error');
+            }
+        }
+
+        // ============= FIN NOUVELLES FONCTIONS =============
+
         // Exporter CSV avec codes inconnus
         function exportCSV() {
             const headers = ['Code Suivi', 'Statut', 'Type'];
@@ -1690,7 +1912,14 @@
                                                     </p>
                                                     <p class="text-xs text-gray-600">${file.count} commandes détectées</p>
                                                 </div>
-                                                <span class="text-green-600 text-2xl">✓</span>
+                                                <div class="flex items-center gap-2">
+                                                    <span class="text-green-600 text-2xl">✓</span>
+                                                    <button onclick="removePDFFile('${file.name}')" 
+                                                            class="px-3 py-1 bg-red-600 text-white rounded-lg text-xs font-bold hover:bg-red-700 transition-all"
+                                                            title="Retirer ce fichier">
+                                                        ❌ Retirer
+                                                    </button>
+                                                </div>
                                             </div>
                                             ${file.expeditor && file.expeditor !== 'Non détecté' ? `
                                                 <div class="mt-2 pt-2 border-t border-blue-200">
@@ -1920,6 +2149,64 @@
                                     <p class="text-green-800 font-bold text-lg">
                                         Dernier: <span class="font-mono">${state.lastScanned}</span>
                                     </p>
+                                </div>
+                            ` : ''}
+
+                            ${state.scannedOrders.size > 0 ? `
+                                <div class="bg-white rounded-2xl border-2 border-green-300 p-4 mt-4">
+                                    <h3 class="font-bold text-green-800 mb-3">✅ Scannés (${state.scannedOrders.size})</h3>
+                                    
+                                    <!-- Barre de recherche -->
+                                    <div class="mb-3">
+                                        <input type="text" 
+                                               id="searchScanned"
+                                               placeholder="🔍 Rechercher un tracking..."
+                                               value="${state.searchScanned || ''}"
+                                               oninput="state.searchScanned = this.value; render();"
+                                               class="w-full px-4 py-3 border-2 border-green-300 rounded-xl text-sm font-mono focus:border-green-500 focus:ring-2 focus:ring-green-200 outline-none">
+                                    </div>
+                                    
+                                    <div class="space-y-2 max-h-80 overflow-auto">
+                                        ${(() => {
+                                            const scannedArray = Array.from(state.scannedOrders).reverse();
+                                            const searchTerm = (state.searchScanned || '').toLowerCase().trim();
+                                            const filtered = searchTerm 
+                                                ? scannedArray.filter(t => t.toLowerCase().includes(searchTerm))
+                                                : scannedArray.slice(0, 50);
+                                            
+                                            if (filtered.length === 0) {
+                                                return '<p class="text-center text-gray-500 py-4">Aucun résultat</p>';
+                                            }
+                                            
+                                            return filtered.map(tracking => `
+                                                <div class="bg-green-50 border border-green-200 rounded-lg p-3 flex items-center justify-between">
+                                                    <p class="font-mono font-bold text-green-900">${tracking}</p>
+                                                    <div class="flex gap-2">
+                                                        <button onclick="unscanTracking('${tracking}')" 
+                                                                class="px-2 py-1 bg-orange-600 text-white rounded text-xs font-bold hover:bg-orange-700"
+                                                                title="Marquer comme non scanné">
+                                                            🔄
+                                                        </button>
+                                                        <button onclick="removeScannedTracking('${tracking}')" 
+                                                                class="px-2 py-1 bg-red-600 text-white rounded text-xs font-bold hover:bg-red-700"
+                                                                title="Supprimer">
+                                                            ❌
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            `).join('');
+                                        })()}
+                                    </div>
+                                    
+                                    ${state.searchScanned ? `
+                                        <p class="text-xs text-gray-500 mt-2 text-center">
+                                            ${Array.from(state.scannedOrders).filter(t => t.toLowerCase().includes(state.searchScanned.toLowerCase())).length} résultat(s)
+                                        </p>
+                                    ` : `
+                                        <p class="text-xs text-gray-500 mt-2 text-center">
+                                            Affichage des 50 derniers scannés
+                                        </p>
+                                    `}
                                 </div>
                             ` : ''}
                         </div>
@@ -3103,9 +3390,16 @@ tr:nth-child(even) { background: #f9f9f9; }
                                         📦 Fichiers importés (${state.retours.uploadedFiles.length})
                                     </h3>
                                     ${state.retours.uploadedFiles.map(file => `
-                                        <div class="bg-gradient-to-r from-orange-50 to-red-50 border-2 border-orange-300 rounded-lg p-4 mb-3">
-                                            <p class="font-semibold text-gray-800">📄 ${file.name}</p>
-                                            <p class="text-sm text-gray-600">${file.count} commandes</p>
+                                        <div class="bg-gradient-to-r from-orange-50 to-red-50 border-2 border-orange-300 rounded-lg p-4 mb-3 flex items-start justify-between">
+                                            <div class="flex-1">
+                                                <p class="font-semibold text-gray-800">📄 ${file.name}</p>
+                                                <p class="text-sm text-gray-600">${file.count} commandes</p>
+                                            </div>
+                                            <button onclick="removeRetourPDFFile('${file.name}')" 
+                                                    class="px-3 py-1 bg-red-600 text-white rounded-lg text-xs font-bold hover:bg-red-700 transition-all"
+                                                    title="Retirer ce fichier">
+                                                ❌ Retirer
+                                            </button>
                                         </div>
                                     `).join('')}
                                 </div>
@@ -3238,6 +3532,64 @@ tr:nth-child(even) { background: #f9f9f9; }
                                     <p class="text-green-800 font-bold text-lg">
                                         Dernier: <span class="font-mono">${state.retours.lastScanned}</span>
                                     </p>
+                                </div>
+                            ` : ''}
+
+                            ${state.retours.scannedOrders.size > 0 ? `
+                                <div class="bg-white rounded-2xl border-2 border-green-300 p-4 mb-4">
+                                    <h3 class="font-bold text-green-800 mb-3">✅ Retours scannés (${state.retours.scannedOrders.size})</h3>
+                                    
+                                    <!-- Barre de recherche -->
+                                    <div class="mb-3">
+                                        <input type="text" 
+                                               id="searchRetourScanned"
+                                               placeholder="🔍 Rechercher un tracking..."
+                                               value="${state.retours.searchScanned || ''}"
+                                               oninput="state.retours.searchScanned = this.value; render();"
+                                               class="w-full px-4 py-3 border-2 border-green-300 rounded-xl text-sm font-mono focus:border-green-500 focus:ring-2 focus:ring-green-200 outline-none">
+                                    </div>
+                                    
+                                    <div class="space-y-2 max-h-80 overflow-auto">
+                                        ${(() => {
+                                            const scannedArray = Array.from(state.retours.scannedOrders).reverse();
+                                            const searchTerm = (state.retours.searchScanned || '').toLowerCase().trim();
+                                            const filtered = searchTerm 
+                                                ? scannedArray.filter(t => t.toLowerCase().includes(searchTerm))
+                                                : scannedArray.slice(0, 50);
+                                            
+                                            if (filtered.length === 0) {
+                                                return '<p class="text-center text-gray-500 py-4">Aucun résultat</p>';
+                                            }
+                                            
+                                            return filtered.map(tracking => `
+                                                <div class="bg-green-50 border border-green-200 rounded-lg p-3 flex items-center justify-between">
+                                                    <p class="font-mono font-bold text-green-900">${tracking}</p>
+                                                    <div class="flex gap-2">
+                                                        <button onclick="unscanRetourTracking('${tracking}')" 
+                                                                class="px-2 py-1 bg-orange-600 text-white rounded text-xs font-bold hover:bg-orange-700"
+                                                                title="Marquer comme non scanné">
+                                                            🔄
+                                                        </button>
+                                                        <button onclick="removeRetourScannedTracking('${tracking}')" 
+                                                                class="px-2 py-1 bg-red-600 text-white rounded text-xs font-bold hover:bg-red-700"
+                                                                title="Supprimer">
+                                                            ❌
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            `).join('');
+                                        })()}
+                                    </div>
+                                    
+                                    ${state.retours.searchScanned ? `
+                                        <p class="text-xs text-gray-500 mt-2 text-center">
+                                            ${Array.from(state.retours.scannedOrders).filter(t => t.toLowerCase().includes(state.retours.searchScanned.toLowerCase())).length} résultat(s)
+                                        </p>
+                                    ` : `
+                                        <p class="text-xs text-gray-500 mt-2 text-center">
+                                            Affichage des 50 derniers scannés
+                                        </p>
+                                    `}
                                 </div>
                             ` : ''}
                         </div>
