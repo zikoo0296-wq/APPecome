@@ -740,9 +740,9 @@
             for (let i = 0; i < lines.length; i++) {
                 const line = lines[i].trim();
                 
-                // Pattern 1: XXX-12345 - CODE (exemple: ORH2503 - S5FE48B7A)
-                // Ce pattern capture le code qui vient APRÈS le tiret
-                const match1 = line.match(/\b\d{3,}\s*-\s*\d+\s+-\s*([A-Za-z][A-Za-z0-9]{7,10})\b/i);
+                // Pattern 1: XXX-12345 - CODE (exemple: 8137 - sf8a6ba6c)
+                // Ce pattern est PRIORITAIRE car il indique clairement la zone code-barres
+                const match1 = line.match(/\b\d{3,}\s*-\s*([A-Za-z][A-Za-z0-9]{7,10})\b/i);
                 if (match1) {
                     const code = match1[1].toUpperCase();
                     codes.add(code);
@@ -750,30 +750,39 @@
                     continue;
                 }
                 
-                // Pattern 2: XXXX - code (format générique avec tiret)
+                // Pattern 2: XXX-12345 - CODE avec tiret supplémentaire (exemple: ORH2503 - S5FE48B7A)
+                const match2 = line.match(/\b\d{3,}\s*-\s*\d+\s+-\s*([A-Za-z][A-Za-z0-9]{7,10})\b/i);
+                if (match2) {
+                    const code = match2[1].toUpperCase();
+                    codes.add(code);
+                    console.log(`  ✅ Pattern code-barres double tiret: ${code}`);
+                    continue;
+                }
+                
+                // Pattern 3: XXXX - code fin de ligne (format générique avec tiret)
                 // Exemple: "79EE09 - s2d3a84fe" ou "91ABCD - s5856a88s"
-                const match2 = line.match(/([a-zA-Z0-9]+)\s*-\s*([A-Za-z][A-Za-z0-9]{7,10})$/i);
-                if (match2 && match2[1].length >= 4) {
-                    const code = match2[2].toUpperCase();
+                const match3 = line.match(/([a-zA-Z0-9]+)\s*-\s*([A-Za-z][A-Za-z0-9]{7,10})$/i);
+                if (match3 && match3[1].length >= 4) {
+                    const code = match3[2].toUpperCase();
                     codes.add(code);
                     console.log(`  ✅ Fin de ligne: ${code}`);
                     continue;
                 }
                 
-                // Pattern 3: STORENAME-xxxxx - code (format DIGYLOG avec nom de store)
+                // Pattern 4: STORENAME-xxxxx - code (format DIGYLOG avec nom de store)
                 // Exemple: "CARENA-28014 - se7e9ab7f"
-                const match3 = line.match(/\b[A-Za-z]+-\d+\s*-\s*([A-Za-z][A-Za-z0-9]{7,10})\b/i);
-                if (match3) {
-                    const code = match3[1].toUpperCase();
+                const match4 = line.match(/\b[A-Za-z]+-\d+\s*-\s*([A-Za-z][A-Za-z0-9]{7,10})\b/i);
+                if (match4) {
+                    const code = match4[1].toUpperCase();
                     codes.add(code);
                     console.log(`  ✅ Pattern STORE-NUM: ${code}`);
                     continue;
                 }
                 
-                // Pattern 4: ORHxxxxx - code ou BCxxxxx - code ou LEXxxxxx - code
-                const match4 = line.match(/\b(?:ORH|BC|LEX)[A-Z0-9]+\s*-\s*([A-Za-z][A-Za-z0-9]{7,10})\b/i);
-                if (match4) {
-                    const code = match4[1].toUpperCase();
+                // Pattern 5: ORHxxxxx - code ou BCxxxxx - code ou LEXxxxxx - code
+                const match5 = line.match(/\b(?:ORH|BC|LEX)[A-Z0-9]+\s*-\s*([A-Za-z][A-Za-z0-9]{7,10})\b/i);
+                if (match5) {
+                    const code = match5[1].toUpperCase();
                     codes.add(code);
                     console.log(`  ✅ Pattern ORH/BC/LEX: ${code}`);
                     continue;
@@ -851,25 +860,37 @@
         function detectExpeditorFromSection(text) {
             const lines = text.split('\n').filter(l => l.trim());
             
-            for (let i = 0; i < Math.min(lines.length, 15); i++) {
+            // Pattern 1: Chercher "Expéditeur : [12345]-nom" ou juste "[12345]-nom"
+            for (let i = 0; i < Math.min(lines.length, 20); i++) {
                 const line = lines[i];
                 
-                // Chercher [12345]-nom
-                if (/expéditeur|expediteur/i.test(line) || /\[\d+\]/.test(line)) {
-                    const match = line.match(/\[(\d+)\]\s*-\s*([a-zA-Z][a-zA-Z0-9\s]+)/i);
-                    if (match) {
-                        return match[2].trim().split(/\s{2,}|\[/)[0];
-                    }
-                    
-                    // Ligne suivante
+                // Chercher [12345]-nom n'importe où dans la ligne
+                const match = line.match(/\[(\d+)\]\s*-\s*([a-zA-Z][a-zA-Z0-9\s]+)/i);
+                if (match) {
+                    const expediteur = match[2].trim().split(/\s{2,}|\[/)[0];
+                    console.log(`  📮 Expéditeur trouvé: [${match[1]}]-${expediteur}`);
+                    return expediteur;
+                }
+            }
+            
+            // Pattern 2: Chercher après "Expéditeur :"
+            for (let i = 0; i < Math.min(lines.length, 20); i++) {
+                const line = lines[i];
+                
+                if (/expéditeur|expediteur/i.test(line)) {
+                    // Ligne suivante pourrait contenir le nom
                     if (lines[i + 1]) {
-                        const nextMatch = lines[i + 1].match(/\[(\d+)\]\s*-\s*([a-zA-Z][a-zA-Z0-9\s]+)/);
-                        if (nextMatch) {
-                            return nextMatch[2].trim().split(/\s{2,}|\[/)[0];
+                        const nextLine = lines[i + 1].trim();
+                        // Extraire le premier mot alphanumérique
+                        const nameMatch = nextLine.match(/^([a-zA-Z][a-zA-Z0-9\s]{2,30})/);
+                        if (nameMatch) {
+                            console.log(`  📮 Expéditeur après "Expéditeur:": ${nameMatch[1].trim()}`);
+                            return nameMatch[1].trim().split(/\s{2,}/)[0];
                         }
                     }
                 }
             }
+            
             return "";
         }
 
