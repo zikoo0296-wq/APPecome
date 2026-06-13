@@ -3435,35 +3435,31 @@ tr:nth-child(even) { background: #f9f9f9; }
                                                 }).join('')}
                                         </div>
                                         
-                                        <!-- Par fichier PDF -->
+                                        <!-- Par fichier PDF (cliquable) -->
                                         <div class="mt-4 pt-4 border-t-2 border-blue-200">
-                                            <p class="font-bold text-blue-800 mb-3">📄 Par fichier PDF</p>
-                                            <div class="space-y-2" id="pdfFileStats">
+                                            <p class="font-bold text-blue-800 mb-3">📄 Par fichier PDF <span class="text-xs font-normal text-gray-500">(cliquer pour voir les manquants)</span></p>
+                                            <div class="space-y-2">
                                                 ${(() => {
-                                                    const fg = {};
-                                                    state.retours.orders.forEach(o => {
-                                                        const fn = (o.fileName || 'Inconnu').replace('.pdf','');
+                                                    var fg = {};
+                                                    state.retours.orders.forEach(function(o) {
+                                                        var fn = (o.fileName || 'Inconnu').replace('.pdf','');
                                                         if (!fg[fn]) fg[fn] = [];
                                                         fg[fn].push(o);
                                                     });
-                                                    return Object.entries(fg).sort((a,b) => b[1].length - a[1].length).map(([fn, ords]) => {
-                                                        const sc = ords.filter(o => state.retours.scannedOrders.has(o.tracking)).length;
-                                                        const rem = ords.length - sc;
-                                                        const pct = Math.round((sc / ords.length) * 100);
-                                                        return '<div class="bg-white rounded-lg p-3 border border-blue-200">' +
+                                                    return Object.entries(fg).sort(function(a,b){return b[1].length-a[1].length;}).map(function(entry) {
+                                                        var fn = entry[0]; var ords = entry[1];
+                                                        var sc = ords.filter(function(o){return state.retours.scannedOrders.has(o.tracking);}).length;
+                                                        var rem = ords.length - sc;
+                                                        var pct = Math.round((sc/ords.length)*100);
+                                                        return '<div class="bg-white rounded-lg p-3 border border-blue-200 cursor-pointer hover:shadow-md transition-all" onclick="showMissingForPDF(\'' + fn + '\')">' +
                                                             '<div class="flex justify-between items-center mb-1">' +
                                                             '<div class="flex items-center gap-2">' +
                                                             '<span class="bg-blue-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-black text-xs">' + ords.length + '</span>' +
                                                             '<span class="font-bold text-blue-900 text-sm">' + fn + '</span>' +
                                                             '</div>' +
-                                                            '<div class="text-sm">' +
-                                                            '<span class="text-green-600 font-bold">✓ ' + sc + '</span>' +
-                                                            '<span class="text-gray-400 mx-1">|</span>' +
-                                                            '<span class="text-red-600 font-bold">✗ ' + rem + '</span>' +
-                                                            '</div></div>' +
-                                                            '<div class="bg-gray-200 rounded-full h-3">' +
-                                                            '<div class="bg-gradient-to-r from-blue-400 to-blue-600 h-full rounded-full" style="width:' + pct + '%"></div>' +
+                                                            '<div class="text-sm"><span class="text-green-600 font-bold">✓ ' + sc + '</span><span class="text-gray-400 mx-1">|</span><span class="text-red-600 font-bold">✗ ' + rem + '</span></div>' +
                                                             '</div>' +
+                                                            '<div class="bg-gray-200 rounded-full h-3"><div class="bg-gradient-to-r from-blue-400 to-blue-600 h-full rounded-full" style="width:' + pct + '%"></div></div>' +
                                                             '<p class="text-xs text-gray-500 mt-1 text-right">' + pct + '% scanné</p>' +
                                                             '</div>';
                                                     }).join('');
@@ -3509,61 +3505,50 @@ tr:nth-child(even) { background: #f9f9f9; }
                             </div>
 
                             <!-- Stats par store avec barres -->
-                            <div class="space-y-2 mb-4">
-                                ${Object.entries(state.retours.storeGroups)
-                                    .sort((a, b) => b[1].length - a[1].length)
-                                    .map(([store, orders]) => {
-                                        const scanned = orders.filter(o => state.retours.scannedOrders.has(o.tracking)).length;
-                                        const remaining = orders.length - scanned;
-                                        const pct = Math.round((scanned / orders.length) * 100);
-                                        return '<div class="bg-white rounded-lg p-3 border border-orange-200">' +
-                                            '<div class="flex justify-between items-center mb-1">' +
-                                            '<div class="flex items-center gap-2">' +
-                                            '<span class="bg-orange-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-black text-sm">' + orders.length + '</span>' +
-                                            '<span class="font-bold text-orange-900">' + store + '</span>' +
-                                            '</div>' +
-                                            '<div class="text-sm">' +
-                                            '<span class="text-green-600 font-bold">✓ ' + scanned + '</span>' +
-                                            '<span class="text-gray-400 mx-1">|</span>' +
-                                            '<span class="text-red-600 font-bold">✗ ' + remaining + '</span>' +
-                                            '</div></div>' +
-                                            '<div class="bg-gray-200 rounded-full h-3">' +
-                                            '<div class="bg-gradient-to-r from-orange-400 to-orange-600 h-full rounded-full" style="width:' + pct + '%"></div>' +
-                                            '</div>' +
-                                            '<p class="text-xs text-gray-500 mt-1 text-right">' + pct + '% scanné</p>' +
-                                            '</div>';
-                                    }).join('')}
+                            <div class="space-y-2 mb-3">
+                                ${Object.entries(state.retours.storeGroups).sort((a,b)=>b[1].length-a[1].length).map(([store,orders]) => {
+                                    var sc2 = orders.filter(o=>state.retours.scannedOrders.has(o.tracking)).length;
+                                    var rem2 = orders.length - sc2;
+                                    var pct2 = Math.round((sc2/orders.length)*100);
+                                    return '<div class="bg-white rounded-lg p-3 border border-orange-200">' +
+                                        '<div class="flex justify-between items-center mb-1">' +
+                                        '<div class="flex items-center gap-2">' +
+                                        '<span class="bg-orange-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-black text-sm">' + orders.length + '</span>' +
+                                        '<span class="font-bold text-orange-900">' + store + '</span>' +
+                                        '</div>' +
+                                        '<div class="text-sm"><span class="text-green-600 font-bold">✓ ' + sc2 + '</span><span class="text-gray-400 mx-1">|</span><span class="text-red-600 font-bold">✗ ' + rem2 + '</span></div>' +
+                                        '</div>' +
+                                        '<div class="bg-gray-200 rounded-full h-3"><div class="bg-gradient-to-r from-orange-400 to-orange-600 h-full rounded-full" style="width:' + pct2 + '%"></div></div>' +
+                                        '<p class="text-xs text-gray-500 mt-1 text-right">' + pct2 + '% scanné</p>' +
+                                        '</div>';
+                                }).join('')}
                             </div>
 
-                            <!-- Stats par fichier PDF avec barres -->
+                            <!-- Stats par PDF (cliquable) -->
                             <div class="space-y-2 mb-4">
-                                <p class="font-bold text-blue-800 text-sm mb-1">📄 Par PDF :</p>
+                                <p class="font-bold text-blue-800 text-sm">📄 Par PDF <span class="text-xs font-normal text-gray-400">(cliquer pour voir manquants)</span></p>
                                 ${(() => {
-                                    const fg = {};
-                                    state.retours.orders.forEach(o => {
-                                        const fn = (o.fileName || 'Inconnu').replace('.pdf','');
-                                        if (!fg[fn]) fg[fn] = [];
-                                        fg[fn].push(o);
+                                    var fg2 = {};
+                                    state.retours.orders.forEach(function(o) {
+                                        var fn2 = (o.fileName || 'Inconnu').replace('.pdf','');
+                                        if (!fg2[fn2]) fg2[fn2] = [];
+                                        fg2[fn2].push(o);
                                     });
-                                    return Object.entries(fg).sort((a,b) => b[1].length - a[1].length).map(([fn, ords]) => {
-                                        const sc = ords.filter(o => state.retours.scannedOrders.has(o.tracking)).length;
-                                        const rem = ords.length - sc;
-                                        const pct = Math.round((sc / ords.length) * 100);
-                                        return '<div class="bg-white rounded-lg p-2 border border-blue-200">' +
+                                    return Object.entries(fg2).sort(function(a,b){return b[1].length-a[1].length;}).map(function(entry2) {
+                                        var fn2 = entry2[0]; var ords2 = entry2[1];
+                                        var sc3 = ords2.filter(function(o){return state.retours.scannedOrders.has(o.tracking);}).length;
+                                        var rem3 = ords2.length - sc3;
+                                        var pct3 = Math.round((sc3/ords2.length)*100);
+                                        return '<div class="bg-white rounded-lg p-2 border border-blue-200 cursor-pointer hover:shadow-md transition-all" onclick="showMissingForPDF(\'' + fn2 + '\')">' +
                                             '<div class="flex justify-between items-center mb-1">' +
                                             '<div class="flex items-center gap-2">' +
-                                            '<span class="bg-blue-500 text-white w-7 h-7 rounded-full flex items-center justify-center font-black text-xs">' + ords.length + '</span>' +
-                                            '<span class="font-bold text-blue-900 text-xs">' + fn + '</span>' +
+                                            '<span class="bg-blue-500 text-white w-7 h-7 rounded-full flex items-center justify-center font-black text-xs">' + ords2.length + '</span>' +
+                                            '<span class="font-bold text-blue-900 text-xs">' + fn2 + '</span>' +
                                             '</div>' +
-                                            '<div class="text-xs">' +
-                                            '<span class="text-green-600 font-bold">✓ ' + sc + '</span>' +
-                                            '<span class="text-gray-400 mx-1">|</span>' +
-                                            '<span class="text-red-600 font-bold">✗ ' + rem + '</span>' +
-                                            '</div></div>' +
-                                            '<div class="bg-gray-200 rounded-full h-2">' +
-                                            '<div class="bg-gradient-to-r from-blue-400 to-blue-600 h-full rounded-full" style="width:' + pct + '%"></div>' +
+                                            '<div class="text-xs"><span class="text-green-600 font-bold">✓ ' + sc3 + '</span><span class="text-gray-400 mx-1">|</span><span class="text-red-600 font-bold">✗ ' + rem3 + '</span></div>' +
                                             '</div>' +
-                                            '<p class="text-xs text-gray-500 mt-1 text-right">' + pct + '% scanné</p>' +
+                                            '<div class="bg-gray-200 rounded-full h-2"><div class="bg-gradient-to-r from-blue-400 to-blue-600 h-full rounded-full" style="width:' + pct3 + '%"></div></div>' +
+                                            '<p class="text-xs text-gray-500 mt-1 text-right">' + pct3 + '% scanné</p>' +
                                             '</div>';
                                     }).join('');
                                 })()}
@@ -3815,6 +3800,63 @@ tr:nth-child(even) { background: #f9f9f9; }
         window.addEventListener('beforeunload', () => {
             stopCamera();
         });
+
+        // Afficher trackings manquants d un PDF
+        function showMissingForPDF(fileName) {
+            var allOrders = state.retours.orders.filter(function(o) {
+                return (o.fileName || 'Inconnu').replace('.pdf','') === fileName;
+            });
+            var missing = allOrders.filter(function(o) { return !state.retours.scannedOrders.has(o.tracking); });
+            var done = allOrders.filter(function(o) { return state.retours.scannedOrders.has(o.tracking); });
+            var pct = allOrders.length > 0 ? Math.round((done.length/allOrders.length)*100) : 0;
+
+            var modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black bg-opacity-80 flex items-start justify-center z-50 p-4 overflow-auto';
+            modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+
+            var missingHTML = missing.map(function(o) {
+                return '<div class="bg-red-50 border border-red-200 rounded-lg p-2 flex items-center justify-between mb-1">' +
+                    '<div><p class="font-mono font-bold text-red-900 text-sm">' + o.tracking + '</p>' +
+                    (o.ville ? '<p class="text-xs text-gray-500">' + o.ville + '</p>' : '') +
+                    '</div>' +
+                    '<button onclick="handleRetourScan(\''+o.tracking+'\'); this.closest(\'.fixed\').remove();" ' +
+                    'class="px-2 py-1 bg-green-600 text-white rounded text-xs font-bold hover:bg-green-700">✓ Scan</button>' +
+                    '</div>';
+            }).join('');
+
+            var doneHTML = done.map(function(o) {
+                return '<div class="bg-green-50 border border-green-200 rounded-lg p-2 mb-1">' +
+                    '<p class="font-mono font-bold text-green-900 text-sm">✓ ' + o.tracking + '</p>' +
+                    (o.ville ? '<p class="text-xs text-gray-500">' + o.ville + '</p>' : '') +
+                    '</div>';
+            }).join('');
+
+            modal.innerHTML =
+                '<div class="bg-white rounded-3xl shadow-2xl w-full max-w-lg mt-4" onclick="event.stopPropagation()">' +
+                '<div class="bg-gradient-to-r from-blue-500 to-blue-700 text-white p-5 rounded-t-3xl">' +
+                '<div class="flex justify-between items-center mb-2">' +
+                '<div><h2 class="text-lg font-black">📄 ' + fileName + '</h2>' +
+                '<div class="flex gap-2 mt-1">' +
+                '<span class="bg-green-500 px-2 py-1 rounded-full text-sm font-bold">✓ ' + done.length + '</span>' +
+                '<span class="bg-red-500 px-2 py-1 rounded-full text-sm font-bold">✗ ' + missing.length + '</span>' +
+                '<span class="bg-white text-blue-700 px-2 py-1 rounded-full text-sm font-bold">' + pct + '%</span>' +
+                '</div></div>' +
+                '<button onclick="this.closest(\'.fixed\').remove()" class="text-white text-3xl font-bold leading-none">×</button>' +
+                '</div></div>' +
+                (missing.length > 0 ?
+                    '<div class="p-4"><h3 class="font-black text-red-700 mb-2">⏳ Manquants (' + missing.length + ')</h3>' +
+                    '<div class="max-h-72 overflow-auto">' + missingHTML + '</div></div>'
+                    : '<div class="p-4 text-center text-green-600 font-black text-lg">🎉 100% complété !</div>') +
+                (done.length > 0 ?
+                    '<div class="p-4 border-t"><h3 class="font-black text-green-700 mb-2">✅ Scannés (' + done.length + ')</h3>' +
+                    '<div class="max-h-40 overflow-auto">' + doneHTML + '</div></div>' : '') +
+                '<div class="p-4 border-t">' +
+                '<button onclick="this.closest(\'.fixed\').remove()" class="w-full py-3 bg-gray-600 text-white rounded-xl font-bold hover:bg-gray-700">Fermer</button>' +
+                '</div></div>';
+
+            document.body.appendChild(modal);
+        }
+
     </script>
 </body>
 </html>
