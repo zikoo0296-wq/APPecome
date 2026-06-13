@@ -1252,71 +1252,55 @@
         function initBarcodeScanner() {
             let buffer = '';
             let timeout = null;
+            let isProcessingScan = false; // Anti-doublon global
 
             document.addEventListener('keypress', function(e) {
-                // Vérifier si on est en mode scan (expéditions ou retours)
                 const isExpeditionScan = state.activeTab === 'expedition' && state.currentView === 'scan' && state.scanMode === 'keyboard';
                 const isRetourScan = state.activeTab === 'retours' && state.retours.currentView === 'scan';
                 
-                if (!isExpeditionScan && !isRetourScan) {
-                    return;
-                }
+                if (!isExpeditionScan && !isRetourScan) return;
 
                 const currentTime = new Date().getTime();
                 
-                // Si le délai entre 2 touches est < 50ms, c'est un scanner (pas un humain)
                 if (currentTime - state.lastKeyTime < 50) {
-                    // C'est un scanner, accumuler les caractères
                     if (e.key === 'Enter') {
-                        // Fin du scan - MINIMUM 7 caractères
-                        if (buffer.length >= 7) {
-                            console.log('📦 Scanner détecté, code complet:', buffer);
+                        // Bloquer pour que l'input HTML ne declenche pas aussi
+                        e.preventDefault();
+                        e.stopPropagation();
+                        
+                        // Annuler le timeout pour eviter double declenchement
+                        if (timeout) { clearTimeout(timeout); timeout = null; }
+                        
+                        if (buffer.length >= 7 && !isProcessingScan) {
+                            isProcessingScan = true;
+                            const code = buffer;
+                            buffer = '';
+                            console.log('Scanner douchette, code:', code);
                             
-                            // Envoyer au bon handler selon l'onglet actif
                             if (state.activeTab === 'retours') {
-                                handleRetourScan(buffer);
-                                const input = document.getElementById('retourScanInput');
-                                if (input) input.value = buffer;
+                                handleRetourScan(code);
                             } else {
-                                handleScan(buffer);
-                                const input = document.getElementById('scanInput');
-                                if (input) input.value = buffer;
+                                handleScan(code);
                             }
+                            
+                            setTimeout(function() { isProcessingScan = false; }, 500);
                         } else {
-                            console.log('⚠️ Code trop court ignoré:', buffer, `(${buffer.length} caractères)`);
+                            buffer = '';
                         }
-                        buffer = '';
                     } else {
                         buffer += e.key;
                     }
                 } else {
-                    // Reset si trop lent (frappe humaine)
                     buffer = e.key;
                 }
                 
                 state.lastKeyTime = currentTime;
 
-                // Sécurité : vider le buffer après 200ms
+                // Vider le buffer apres 300ms (sans declencher le scan)
                 if (timeout) clearTimeout(timeout);
-                timeout = setTimeout(() => {
-                    if (buffer.length >= 7) {  // MINIMUM 7 caractères
-                        console.log('📦 Code détecté (timeout):', buffer);
-                        
-                        // Envoyer au bon handler selon l'onglet actif
-                        if (state.activeTab === 'retours') {
-                            handleRetourScan(buffer);
-                            const input = document.getElementById('retourScanInput');
-                            if (input) input.value = buffer;
-                        } else {
-                            handleScan(buffer);
-                            const input = document.getElementById('scanInput');
-                            if (input) input.value = buffer;
-                        }
-                    } else if (buffer.length > 0) {
-                        console.log('⚠️ Buffer vidé (trop court):', buffer, `(${buffer.length} caractères)`);
-                    }
+                timeout = setTimeout(function() {
                     buffer = '';
-                }, 200);
+                }, 300);
             });
         }
 
@@ -3512,7 +3496,6 @@ tr:nth-child(even) { background: #f9f9f9; }
                                            id="retourScanInput"
                                            class="flex-1 px-4 py-4 border-2 border-orange-300 rounded-xl text-lg font-mono focus:border-orange-500 focus:ring-2 focus:ring-orange-200 outline-none"
                                            placeholder="Scanner ou saisir le tracking..."
-                                           onkeypress="if(event.key === 'Enter') { handleRetourScan(this.value); this.value = ''; }"
                                            autofocus>
                                     <button onclick="handleRetourScan(document.getElementById('retourScanInput').value); document.getElementById('retourScanInput').value = '';" 
                                             class="px-6 py-4 bg-orange-600 text-white rounded-xl font-bold hover:bg-orange-700 transition-all">
