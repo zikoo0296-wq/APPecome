@@ -1261,46 +1261,46 @@
                 if (!isExpeditionScan && !isRetourScan) return;
 
                 const currentTime = new Date().getTime();
-                
-                if (currentTime - state.lastKeyTime < 50) {
-                    if (e.key === 'Enter') {
-                        // Bloquer pour que l'input HTML ne declenche pas aussi
-                        e.preventDefault();
-                        e.stopPropagation();
-                        
-                        // Annuler le timeout pour eviter double declenchement
-                        if (timeout) { clearTimeout(timeout); timeout = null; }
-                        
-                        if (buffer.length >= 7 && !isProcessingScan) {
-                            isProcessingScan = true;
-                            const code = buffer;
-                            buffer = '';
-                            console.log('Scanner douchette, code:', code);
-                            
-                            if (state.activeTab === 'retours') {
-                                handleRetourScan(code);
-                            } else {
-                                handleScan(code);
-                            }
-                            
-                            setTimeout(function() { isProcessingScan = false; }, 500);
-                        } else {
-                            buffer = '';
-                        }
-                    } else {
-                        buffer += e.key;
-                    }
-                } else {
-                    buffer = e.key;
-                }
-                
+                const timeDiff = currentTime - state.lastKeyTime;
                 state.lastKeyTime = currentTime;
 
-                // Vider le buffer apres 300ms (sans declencher le scan)
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (timeout) { clearTimeout(timeout); timeout = null; }
+
+                    if (buffer.length >= 6 && !isProcessingScan) {
+                        isProcessingScan = true;
+                        const code = buffer;
+                        buffer = '';
+                        console.log('Douchette code:', code, '(' + code.length + ' chars)');
+
+                        if (state.activeTab === 'retours') {
+                            handleRetourScan(code);
+                        } else {
+                            handleScan(code);
+                        }
+                        setTimeout(function() { isProcessingScan = false; }, 400);
+                    } else {
+                        buffer = '';
+                    }
+                    return;
+                }
+
+                // Accumuler le caractère
+                // Si gap > 500ms → nouvelle séquence (reset buffer)
+                // Si gap > 100ms mais < 500ms → douchette lente, continuer d'accumuler
+                if (timeDiff > 500) {
+                    buffer = e.key; // Nouveau code
+                } else {
+                    buffer += e.key; // Continuer d'accumuler
+                }
+
+                // Reset automatique après 400ms sans touche
                 if (timeout) clearTimeout(timeout);
                 timeout = setTimeout(function() {
                     buffer = '';
-                }, 300);
+                }, 400);
             });
         }
 
@@ -3139,13 +3139,9 @@ tr:nth-child(even) { background: #f9f9f9; }
             
             console.log('🔍 Scan retour:', cleanCode);
             
-            // Vérifier format - accepter S... et RE-S...
-            // Format: S + 6-10 caractères OU RE-S + 6-10 caractères
-            if (!/^(RE-)?S[A-Z0-9]{6,10}$/i.test(cleanCode)) {
-                console.log('❌ Format invalide:', cleanCode);
-                showNotification('❌ Format invalide', 'error');
-                playSound('error');
-                return;
+            // Vérifier longueur minimale seulement (pas de format strict)
+            if (cleanCode.length < 6) {
+                return; // Trop court, ignorer silencieusement
             }
             
             // Déjà scanné ?
