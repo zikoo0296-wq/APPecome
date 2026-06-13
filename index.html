@@ -2960,254 +2960,132 @@ tr:nth-child(even) { background: #f9f9f9; }
 
         // Extraire les commandes retour depuis le PDF BR
         function extractRetourOrders(text) {
-            console.log('🔄 === EXTRACTION RETOURS ===');
-            console.log('📄 Texte reçu:', text.length, 'caractères');
-            
+            console.log('EXTRACTION RETOURS v3');
+
             const orders = [];
             const seenTrackings = new Set();
-            
-            // Liste de mots à exclure (villes, noms communs)
-            const excludeWords = [
-                'SLIMANE', 'SIDI', 'SETTAT', 'SAFI', 'SALE', 'SMARA', 'SMIMOU',
-                'SIGNATURE', 'STORE', 'SELLER', 'SUIVANT', 'SUIVRE', 'SOUSSE',
-                'SKHIRATE', 'SEBT', 'SEFROU', 'SEBTA', 'SOUK', 'SKHOUR'
-            ];
-            
-            // Mots à exclure comme nom de store (colonnes d'en-tête, etc.)
-            const excludeStoreWords = ['store', 'phone', 'order', 'traking', 'ville', 'total', 'signature', 'date', 'nombre'];
 
-            // Fonction pour valider un tracking DIGYLOG
-            function isValidTracking(code) {
-                if (!code) return false;
-                const upperCode = code.toUpperCase();
-                for (const word of excludeWords) {
-                    if (upperCode === word || upperCode.startsWith(word + ' ')) return false;
+            const excludeStoreWords = new Set(['store', 'phone', 'order', 'traking', 'ville', 'total', 'signature', 'date', 'nombre', 'brs', 'hay', 'moulay', 'rachid', 'machaoui', 'adil', 'digylog']);
+
+            // ETAPE 1: Detecter le store dominant via pattern [store] [10chiffres]
+            const storePhonePattern = /\b([a-zA-Z][a-zA-Z0-9]*)\s+(\d{10})\b/g;
+            const storeCounts = {};
+            let matchSP;
+            while ((matchSP = storePhonePattern.exec(text)) !== null) {
+                const candidate = matchSP[1].toLowerCase();
+                if (!excludeStoreWords.has(candidate) && candidate.length >= 3) {
+                    storeCounts[candidate] = (storeCounts[candidate] || 0) + 1;
                 }
-                if (!upperCode.match(/^(RE-)?S[A-Z0-9]/)) return false;
-                const afterS = upperCode.replace(/^(RE-)?S/, '');
-                const hasDigit = /\d/.test(afterS);
-                if (!hasDigit && /^[A-Z]+$/.test(afterS)) return false;
-                if (afterS.length < 6 || afterS.length > 10) return false;
-                return true;
             }
+            const sortedStores = Object.entries(storeCounts).sort((a, b) => b[1] - a[1]);
+            console.log('Stores detectes:', sortedStores);
+            const dominantStore = sortedStores.length > 0
+                ? sortedStores[0][0].charAt(0).toUpperCase() + sortedStores[0][0].slice(1).toLowerCase()
+                : 'Non identifie';
 
-            // ============================================================
-            // ÉTAPE 1: Détecter les colonnes du tableau depuis l'en-tête
-            // Format BR Digylog: Order | Traking | Ville | Store | Store Phone
-            // ============================================================
-            const lines = text.split(/[\n\r]+/).map(l => l.trim()).filter(l => l.length > 0);
-            console.log(`📄 ${lines.length} lignes à analyser`);
+            // ETAPE 2: Trouver tous les trackings valides
+            // Accepte: S..., RE-S..., EC-S...
+            const trackingRegex = /\b(?:RE-|EC-)?S[A-Z0-9]{6,10}\b/gi;
+            const allTrackings = [];
+            let tm;
+            while ((tm = trackingRegex.exec(text)) !== null) {
+                const t = tm[0].toUpperCase();
+                const body = t.replace(/^(?:RE-|EC-)?S/, '');
+                if (/\d/.test(body) && body.length >= 6 && body.length <= 10) {
+                    if (!seenTrackings.has(t)) {
+                        seenTrackings.add(t);
+                        allTrackings.push({ tracking: t, pos: tm.index });
+                    }
+                }
+            }
+            console.log(allTrackings.length + ' trackings uniques trouves');
 
-            // Chercher la ligne d'en-tête du tableau
-            let headerLineIndex = -1;
-            let colOrder = -1, colTracking = -1, colVille = -1, colStore = -1, colPhone = -1;
+            // ETAPE 3: Pour chaque tracking, extraire store + ville depuis contexte
+            for (const item of allTrackings) {
+                const tracking = item.tracking;
+                const pos = item.pos;
 
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i].toLowerCase();
-                if (line.includes('order') && line.includes('trak') && line.includes('ville')) {
-                    headerLineIndex = i;
-                    // Détecter les positions des colonnes par les mots-clés
-                    const parts = lines[i].split(/\s{2,}|\t/).map(p => p.trim()).filter(p => p.length > 0);
-                    console.log('📋 En-tête trouvé ligne', i, ':', parts);
-                    parts.forEach((p, idx) => {
-                        const pl = p.toLowerCase();
-                        if (pl.includes('order')) colOrder = idx;
-                        else if (pl.includes('trak')) colTracking = idx;
-                        else if (pl.includes('ville')) colVille = idx;
-                        else if (pl.includes('store phone') || pl.includes('phone')) colPhone = idx;
-                        else if (pl.includes('store')) colStore = idx;
+                // Contexte apres le tracking (200 chars), aplati en une ligne
+                const rawAfter = text.substring(pos + tracking.length, pos + tracking.length + 200);
+                const cleanAfter = rawAfter.replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+                const tokens = cleanAfter.split(/\s+/).filter(function(t) { return t.length > 0; });
+
+                // Contexte avant pour l'orderId
+                const rawBefore = text.substring(Math.max(0, pos - 150), pos);
+                const beforeLines = rawBefore.split(/\n/).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
+                let orderId = 'N/A';
+                if (beforeLines.length > 0) {
+                    const lastLine = beforeLines[beforeLines.length - 1];
+                    const beforeTokens = lastLine.split(/\s+/).filter(function(t) { return t.length > 0; });
+                    if (beforeTokens.length > 0) {
+                        orderId = beforeTokens[beforeTokens.length - 1];
+                    }
+                }
+
+                let store = '';
+                let ville = '';
+
+                // Chercher le premier numero de telephone (10 chiffres) dans les 8 premiers tokens
+                let phoneIdx = -1;
+                for (let j = 0; j < Math.min(tokens.length, 10); j++) {
+                    if (/^\d{10}$/.test(tokens[j])) {
+                        phoneIdx = j;
+                        break;
+                    }
+                }
+
+                if (phoneIdx >= 1) {
+                    // Token juste avant le telephone = store
+                    store = tokens[phoneIdx - 1];
+                    // Tokens avant le store = ville
+                    const villeParts = tokens.slice(0, phoneIdx - 1).filter(function(t) {
+                        return !excludeStoreWords.has(t.toLowerCase()) && !/^\d+$/.test(t) && t.length > 1;
                     });
-                    console.log(`📋 Colonnes: order=${colOrder} tracking=${colTracking} ville=${colVille} store=${colStore} phone=${colPhone}`);
-                    break;
+                    ville = villeParts.join(' ');
+                } else {
+                    // Pas de telephone: chercher store connu
+                    var foundStore = false;
+                    for (let s = 0; s < sortedStores.length; s++) {
+                        const storeName = sortedStores[s][0];
+                        const idx = cleanAfter.toLowerCase().indexOf(storeName);
+                        if (idx !== -1) {
+                            store = storeName;
+                            const villeParts = cleanAfter.substring(0, idx).split(/\s+/).filter(function(t) {
+                                return !excludeStoreWords.has(t.toLowerCase()) && !/^\d+$/.test(t) && t.length > 1;
+                            });
+                            ville = villeParts.join(' ');
+                            foundStore = true;
+                            break;
+                        }
+                    }
+                    if (!foundStore) {
+                        store = dominantStore.toLowerCase();
+                    }
                 }
-            }
 
-            // ============================================================
-            // ÉTAPE 2: Parser les lignes de données après l'en-tête
-            // ============================================================
-            // Chercher le store dominant depuis le PDF (Store Phone = numéro de téléphone du store)
-            // On va lire chaque ligne qui contient un tracking et extraire le store de la bonne position
-            
-            const potentialTrackings = text.match(/\b(?:RE-)?S[A-Z0-9]{6,10}\b/gi) || [];
-            const validTrackings = potentialTrackings.filter(t => isValidTracking(t));
-            console.log(`🔍 Trackings valides: ${validTrackings.length}`);
-
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-
-                // Ignorer les lignes d'en-tête et de pied
-                if (/^Order\s+Trak/i.test(line)) continue;
-                if (/^TOTAL\s*\d*/i.test(line)) continue;
-                if (/^Signature/i.test(line)) continue;
-                if (/^N°\s*CIN/i.test(line)) continue;
-                if (/^BRS\s*N°/i.test(line)) continue;
-                if (/^Date\s*:/i.test(line)) continue;
-                if (/^Nombre\s+commandes/i.test(line)) continue;
-                if (/^Phone\s*:/i.test(line)) continue;
-                if (/^HAY\s+MOULAY/i.test(line)) continue;
-                if (/^MACHAOUI/i.test(line)) continue;
-                if (/DIGYLOG/i.test(line)) continue;
-                if (/^BR-\d+\s+@/i.test(line)) continue;
-                if (/^@\s*\d+$/i.test(line)) continue;
-
-                // Chercher les trackings dans cette ligne
-                const trackingMatches = line.match(/\b(?:RE-)?S[A-Z0-9]{6,10}\b/gi) || [];
-
-                for (const trackingRaw of trackingMatches) {
-                    const tracking = trackingRaw.toUpperCase();
-                    if (!isValidTracking(tracking)) continue;
-                    if (seenTrackings.has(tracking)) continue;
-                    seenTrackings.add(tracking);
-
-                    const trackingIndex = line.toUpperCase().indexOf(tracking);
-                    const beforeTracking = line.substring(0, trackingIndex).trim();
-                    const afterTracking = line.substring(trackingIndex + tracking.length).trim();
-
-                    // Order ID = premier mot avant le tracking
-                    let orderId = 'N/A';
-                    const orderParts = beforeTracking.split(/\s+/);
-                    if (orderParts.length > 0 && orderParts[0].length > 0) {
-                        orderId = orderParts[0];
-                    }
-
-                    // ============================================================
-                    // EXTRACTION STORE: lire directement depuis le texte après tracking
-                    // Format ligne: [OrderId] [Tracking] [Ville] [Store] [StorePhone]
-                    // Les colonnes peuvent être séparées par 1 ou plusieurs espaces
-                    // ============================================================
-                    let ville = '';
-                    let store = '';
-
-                    // D'abord essayer split double-espace (séparateur propre)
-                    const afterParts = afterTracking.split(/\s{2,}|\t/).map(p => p.trim()).filter(p => p.length > 0);
-                    // Aussi split simple espace pour avoir tous les tokens
-                    const simpleParts = afterTracking.split(/\s+/).filter(p => p.length > 0);
-                    
-                    console.log(`  🔍 Après tracking "${tracking}":`, afterParts, '| simple:', simpleParts);
-
-                    if (afterParts.length >= 2) {
-                        // Double-espace trouvé → colonnes bien délimitées
-                        // afterParts[0] = Ville, afterParts[1] = Store (ou Store+Phone)
-                        ville = afterParts[0];
-                        if (/^\d{9,}$/.test(afterParts[1])) {
-                            // afterParts[1] est un téléphone → store = ville
-                            store = afterParts[0];
-                            ville = '';
-                        } else {
-                            // afterParts[1] peut être "lhewta 0706066127" ou juste "lhewta"
-                            const storeParts = afterParts[1].split(/\s+/);
-                            // Si le dernier token est un numéro, le store est tout sauf le dernier
-                            if (/^\d{9,}$/.test(storeParts[storeParts.length - 1])) {
-                                store = storeParts.slice(0, -1).join(' ');
-                            } else {
-                                store = afterParts[1].split(/\s+/)[0]; // Prendre premier mot
-                            }
-                        }
-                    } else if (simpleParts.length >= 2) {
-                        // Séparation simple espace : format "Ville Store StorePhone" ou "Ville Store"
-                        // Le dernier token numérique (>=9 chiffres) = StorePhone
-                        // L'avant-dernier (si le dernier est téléphone) OU le dernier = Store
-                        // Le reste = Ville
-                        
-                        const lastPart = simpleParts[simpleParts.length - 1];
-                        const isLastPhone = /^\d{9,}$/.test(lastPart);
-                        
-                        if (isLastPhone && simpleParts.length >= 3) {
-                            // Format: Ville Store StorePhone
-                            store = simpleParts[simpleParts.length - 2];
-                            ville = simpleParts.slice(0, -2).join(' ');
-                        } else if (isLastPhone && simpleParts.length === 2) {
-                            // Format: Store StorePhone
-                            store = simpleParts[0];
-                            ville = '';
-                        } else {
-                            // Pas de téléphone → dernier mot = store
-                            store = lastPart;
-                            ville = simpleParts.slice(0, -1).join(' ');
-                        }
-                    } else if (simpleParts.length === 1) {
-                        if (/^\d{9,}$/.test(simpleParts[0])) {
-                            store = 'Non identifié';
-                        } else {
-                            store = simpleParts[0];
-                        }
-                    }
-
-                    // Si le store trouvé est un mot exclu → fallback : chercher premier mot non-exclu non-numérique
-                    if (!store || excludeStoreWords.includes(store.toLowerCase()) || /^\d+$/.test(store)) {
-                        const candidate = simpleParts.find(p => 
-                            !/^\d+$/.test(p) && 
-                            !excludeStoreWords.includes(p.toLowerCase()) &&
-                            p.length >= 2
-                        );
-                        if (candidate) store = candidate;
-                        else store = 'Non identifié';
-                    }
-
-                    // Nettoyer le store (garder lettres, chiffres, espaces, tirets)
-                    store = store.replace(/[^\w\s\-]/g, '').trim();
-
-                    // Capitaliser proprement
-                    if (store && store.length > 0) {
-                        store = store.charAt(0).toUpperCase() + store.slice(1).toLowerCase();
-                    } else {
-                        store = 'Non identifié';
-                    }
-
-                    console.log(`  ✅ ${tracking} | Ville: "${ville}" | Store: "${store}"`);
-
-                    orders.push({
-                        order: orderId,
-                        tracking: tracking,
-                        ville: ville.trim(),
-                        store: store,
-                        scanned: false,
-                        id: Date.now() + Math.random()
-                    });
+                // Valider et capitaliser le store
+                if (!store || excludeStoreWords.has(store.toLowerCase()) || /^\d+$/.test(store) || store.length < 2) {
+                    store = dominantStore;
+                } else {
+                    store = store.charAt(0).toUpperCase() + store.slice(1).toLowerCase();
                 }
-            }
 
-            // MÉTHODE FALLBACK: Si peu de résultats, ajouter les trackings valides non trouvés
-            if (orders.length < validTrackings.length / 2) {
-                console.log('⚠️ Méthode principale insuffisante, utilisation fallback');
-                
-                // Chercher le store dominant dans le texte (mot le plus répété qui n'est pas un mot commun)
-                const wordFreq = {};
-                text.split(/\s+/).forEach(w => {
-                    const wl = w.toLowerCase().replace(/[^a-z]/g, '');
-                    if (wl.length >= 3 && !excludeStoreWords.includes(wl) && !/^\d+$/.test(wl)) {
-                        wordFreq[wl] = (wordFreq[wl] || 0) + 1;
-                    }
+                if (ville.length > 60) ville = ville.substring(0, 60);
+
+                orders.push({
+                    order: orderId,
+                    tracking: tracking,
+                    ville: ville.trim(),
+                    store: store,
+                    scanned: false,
+                    id: Date.now() + Math.random()
                 });
-                const topWord = Object.entries(wordFreq).sort((a, b) => b[1] - a[1])[0];
-                const dominantStore = topWord 
-                    ? topWord[0].charAt(0).toUpperCase() + topWord[0].slice(1) 
-                    : 'Non identifié';
-                
-                for (const trackingRaw of validTrackings) {
-                    const tracking = trackingRaw.toUpperCase();
-                    if (!seenTrackings.has(tracking)) {
-                        seenTrackings.add(tracking);
-                        orders.push({
-                            order: 'N/A',
-                            tracking: tracking,
-                            ville: '',
-                            store: dominantStore,
-                            scanned: false,
-                            id: Date.now() + Math.random()
-                        });
-                    }
-                }
             }
 
-            // Log des stats par store
             const storeStats = {};
-            orders.forEach(o => {
-                const s = o.store || 'Non identifié';
-                storeStats[s] = (storeStats[s] || 0) + 1;
-            });
-            console.log('📊 Stats par store:', storeStats);
-            console.log(`✅ ${orders.length} commandes retour extraites (uniques)`);
+            orders.forEach(function(o) { storeStats[o.store] = (storeStats[o.store] || 0) + 1; });
+            console.log('Stats par store:', storeStats);
+            console.log(orders.length + ' commandes retour extraites');
 
             return orders;
         }
