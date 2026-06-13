@@ -2565,6 +2565,59 @@
             document.body.appendChild(modal);
         }
 
+        // Voir le PDF d un retour
+        async function showRetourOrderDetails(trackingCode) {
+            const order = state.retours.orders.find(o => o.tracking === trackingCode);
+            if (!order) { showNotification("Commande retour non trouvee", "error"); return; }
+            let pdfPage = state.pdfPages ? state.pdfPages[trackingCode] : null;
+            if (!pdfPage || !pdfPage.image) {
+                try {
+                    pdfPage = await getPDFPageFromDB(trackingCode);
+                    if (pdfPage) { if (!state.pdfPages) state.pdfPages = {}; state.pdfPages[trackingCode] = pdfPage; }
+                } catch (e) { console.error(e); }
+            }
+            if (!pdfPage || !pdfPage.image) { showNotification("Image PDF non disponible - Reimportez le PDF", "error"); return; }
+            const modal = document.createElement("div");
+            modal.className = "fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50 p-4";
+            modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+            modal.innerHTML = `
+                <div class="bg-white rounded-3xl shadow-2xl max-w-6xl w-full max-h-[95vh] overflow-hidden flex flex-col" onclick="event.stopPropagation()">
+                    <div class="bg-gradient-to-r from-orange-500 to-red-500 text-white p-6">
+                        <div class="flex items-center justify-between mb-2">
+                            <h2 class="text-2xl font-black">Retour - PDF Original</h2>
+                            <button onclick="this.closest('.fixed').remove()" class="text-white hover:text-gray-200 text-4xl font-bold leading-none">x</button>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="font-mono text-2xl font-black">${trackingCode}</p>
+                                <p class="text-sm opacity-90 mt-1">Fichier: ${order.fileName || "BR"} - Page ${pdfPage.pageNumber}/${pdfPage.totalPages}</p>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-sm opacity-90">Store: ${order.store || ""}</p>
+                                ${order.ville ? "<p class='text-sm opacity-90'>"+order.ville+"</p>" : ""}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex-1 overflow-auto bg-gray-100 p-6">
+                        <div class="bg-white rounded-lg shadow-xl p-4 inline-block">
+                            <img src="${pdfPage.image}" class="max-w-full h-auto" style="max-height: 70vh;">
+                        </div>
+                    </div>
+                    <div class="p-6 border-t-2 border-gray-200 bg-white flex gap-3">
+                        <button onclick="handleRetourScan('${trackingCode}'); this.closest('.fixed').remove()"
+                                class="flex-1 py-4 bg-green-600 hover:bg-green-700 text-white rounded-xl font-bold text-lg transition-all">
+                            Scanner ce retour
+                        </button>
+                        <button onclick="this.closest('.fixed').remove()"
+                                class="px-8 py-4 bg-gray-600 hover:bg-gray-700 text-white rounded-xl font-bold text-lg transition-all">
+                            Fermer
+                        </button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
         // Imprimer la page PDF originale
         async function printPDFPage(trackingCode) {
             // Chercher l'image en mémoire d'abord
@@ -3020,53 +3073,75 @@ tr:nth-child(even) { background: #f9f9f9; }
                     // ============================================================
                     // EXTRACTION STORE: lire directement depuis le texte après tracking
                     // Format ligne: [OrderId] [Tracking] [Ville] [Store] [StorePhone]
+                    // Les colonnes peuvent être séparées par 1 ou plusieurs espaces
                     // ============================================================
                     let ville = '';
                     let store = '';
 
+                    // D'abord essayer split double-espace (séparateur propre)
                     const afterParts = afterTracking.split(/\s{2,}|\t/).map(p => p.trim()).filter(p => p.length > 0);
-                    console.log(`  🔍 Après tracking "${tracking}":`, afterParts);
+                    // Aussi split simple espace pour avoir tous les tokens
+                    const simpleParts = afterTracking.split(/\s+/).filter(p => p.length > 0);
+                    
+                    console.log(`  🔍 Après tracking "${tracking}":`, afterParts, '| simple:', simpleParts);
 
                     if (afterParts.length >= 2) {
-                        // afterParts[0] = Ville, afterParts[1] = Store (ou Store Phone)
+                        // Double-espace trouvé → colonnes bien délimitées
+                        // afterParts[0] = Ville, afterParts[1] = Store (ou Store+Phone)
                         ville = afterParts[0];
-
-                        // Le store peut être sur afterParts[1], sauf si c'est un numéro de téléphone
-                        // Si afterParts[1] est un numéro (ex: 0706066127), c'est le Store Phone → le store est avant
                         if (/^\d{9,}$/.test(afterParts[1])) {
-                            // afterParts[1] est un téléphone → chercher store dans les mots simples avant
-                            store = afterParts[0]; // parfois ville = store dans ce layout
+                            // afterParts[1] est un téléphone → store = ville
+                            store = afterParts[0];
                             ville = '';
                         } else {
-                            store = afterParts[1];
-                            // Si afterParts[2] existe et est un numéro → c'est le téléphone, store = afterParts[1] ✓
+                            // afterParts[1] peut être "lhewta 0706066127" ou juste "lhewta"
+                            const storeParts = afterParts[1].split(/\s+/);
+                            // Si le dernier token est un numéro, le store est tout sauf le dernier
+                            if (/^\d{9,}$/.test(storeParts[storeParts.length - 1])) {
+                                store = storeParts.slice(0, -1).join(' ');
+                            } else {
+                                store = afterParts[1].split(/\s+/)[0]; // Prendre premier mot
+                            }
                         }
-                    } else if (afterParts.length === 1) {
-                        // Une seule valeur → peut être ville ou store
-                        if (/^\d{9,}$/.test(afterParts[0])) {
+                    } else if (simpleParts.length >= 2) {
+                        // Séparation simple espace : format "Ville Store StorePhone" ou "Ville Store"
+                        // Le dernier token numérique (>=9 chiffres) = StorePhone
+                        // L'avant-dernier (si le dernier est téléphone) OU le dernier = Store
+                        // Le reste = Ville
+                        
+                        const lastPart = simpleParts[simpleParts.length - 1];
+                        const isLastPhone = /^\d{9,}$/.test(lastPart);
+                        
+                        if (isLastPhone && simpleParts.length >= 3) {
+                            // Format: Ville Store StorePhone
+                            store = simpleParts[simpleParts.length - 2];
+                            ville = simpleParts.slice(0, -2).join(' ');
+                        } else if (isLastPhone && simpleParts.length === 2) {
+                            // Format: Store StorePhone
+                            store = simpleParts[0];
+                            ville = '';
+                        } else {
+                            // Pas de téléphone → dernier mot = store
+                            store = lastPart;
+                            ville = simpleParts.slice(0, -1).join(' ');
+                        }
+                    } else if (simpleParts.length === 1) {
+                        if (/^\d{9,}$/.test(simpleParts[0])) {
                             store = 'Non identifié';
                         } else {
-                            store = afterParts[0];
+                            store = simpleParts[0];
                         }
                     }
 
-                    // Si le store est vide ou c'est un mot exclu → chercher en split simple (espaces simples)
-                    if (!store || excludeStoreWords.includes(store.toLowerCase())) {
-                        const simpleParts = afterTracking.split(/\s+/).filter(p => p.length > 0);
-                        // Ignorer les numéros de téléphone et les mots d'en-tête
-                        const storeCandidate = simpleParts.find(p => 
+                    // Si le store trouvé est un mot exclu → fallback : chercher premier mot non-exclu non-numérique
+                    if (!store || excludeStoreWords.includes(store.toLowerCase()) || /^\d+$/.test(store)) {
+                        const candidate = simpleParts.find(p => 
                             !/^\d+$/.test(p) && 
                             !excludeStoreWords.includes(p.toLowerCase()) &&
                             p.length >= 2
                         );
-                        if (storeCandidate) {
-                            store = storeCandidate;
-                            // Ville = tout ce qui est avant le store dans afterTracking
-                            const storeIdx = afterTracking.indexOf(storeCandidate);
-                            if (storeIdx > 0) {
-                                ville = afterTracking.substring(0, storeIdx).trim();
-                            }
-                        }
+                        if (candidate) store = candidate;
+                        else store = 'Non identifié';
                     }
 
                     // Nettoyer le store (garder lettres, chiffres, espaces, tirets)
@@ -3159,6 +3234,7 @@ tr:nth-child(even) { background: #f9f9f9; }
                         for (const order of orders) {
                             if (!existingTrackings.has(order.tracking)) {
                                 existingTrackings.add(order.tracking);
+                                order.fileName = file.name; // 📁 Ajouter le nom du fichier
                                 allOrders.push(order);
                             }
                         }
@@ -3657,14 +3733,20 @@ tr:nth-child(even) { background: #f9f9f9; }
                                                 <div class="max-h-60 overflow-auto space-y-1 pl-2">
                                                     ${remaining.slice(0, 20).map(order => `
                                                         <div class="bg-orange-50 border border-orange-200 rounded-lg p-2 flex items-center justify-between">
-                                                            <div>
+                                                            <div class="flex-1">
                                                                 <p class="font-mono font-bold text-orange-900 text-sm">${order.tracking}</p>
-                                                                <p class="text-xs text-gray-500">${order.order} | ${order.ville}</p>
+                                                                <p class="text-xs text-gray-500">${order.order}${order.ville ? ' | ' + order.ville : ''}${order.fileName ? ' | 📁 ' + order.fileName : ''}</p>
                                                             </div>
-                                                            <button onclick="handleRetourScan('${order.tracking}')" 
-                                                                    class="px-2 py-1 bg-orange-600 text-white rounded text-xs font-bold hover:bg-orange-700">
-                                                                ✓
-                                                            </button>
+                                                            <div class="flex gap-1 ml-2">
+                                                                <button onclick="handleRetourScan('${order.tracking}')" 
+                                                                        class="px-2 py-1 bg-green-600 text-white rounded text-xs font-bold hover:bg-green-700">
+                                                                    ✓ Scan
+                                                                </button>
+                                                                <button onclick="showRetourOrderDetails('${order.tracking}')" 
+                                                                        class="px-2 py-1 bg-blue-600 text-white rounded text-xs font-bold hover:bg-blue-700">
+                                                                    🔍 Voir
+                                                                </button>
+                                                            </div>
                                                         </div>
                                                     `).join('')}
                                                     ${remaining.length > 20 ? `
